@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Emergency Response System - Operator Mission Control</title>
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="css/dashboard.css">
+</head>
+<body>
+
+  <!-- Top Navigation / Header -->
+  <header class="dashboard-header">
+    <div class="brand-section">
+      <div class="brand-icon">🚨</div>
+      <div class="brand-title">
+        <h1>SMART <span class="highlight">EMERGENCY RESPONSE</span></h1>
+        <p>Operator Mission Control &bull; C++ DSA Dynamic Dijkstra Engine</p>
+      </div>
+    </div>
+
+    <!-- Live Telemetry Metrics -->
+    <div class="header-metrics">
+      <div class="metric-pill alert">
+        <span class="label">Active</span>
+        <span class="val" id="stat-active">0</span>
+      </div>
+      <div class="metric-pill">
+        <span class="label">Heap Queued</span>
+        <span class="val" id="stat-queued">0</span>
+      </div>
+      <div class="metric-pill cyan">
+        <span class="label">Dispatched</span>
+        <span class="val" id="stat-dispatched">0</span>
+      </div>
+      <div class="metric-pill success">
+        <span class="label">Resolved</span>
+        <span class="val" id="stat-resolved">0</span>
+      </div>
+    </div>
+
+    <!-- Live Connection Status & Clock -->
+    <div class="header-status">
+      <div id="connection-badge" class="connection-badge connecting">
+        <span class="pulse-dot"></span> CONNECTING...
+      </div>
+      <div class="clock-display" id="clock-display">--:--:-- UTC</div>
+    </div>
+  </header>
+
+  <!-- Main 3-Column Dashboard Grid -->
+  <main class="dashboard-grid">
+
+    <!-- Column 1: Intake & Network Controls -->
+    <section class="col-panel left-col">
+      
+      <!-- Incident Intake Form -->
+      <div class="card">
+        <div class="card-header">
+          <h2><span>📝</span> Incident Intake</h2>
+        </div>
+        <form id="dispatch-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="em-type">Emergency Type</label>
+              <select id="em-type" class="form-control">
+                <option value="ACCIDENT">Accident</option>
+                <option value="FIRE">Fire Hazard</option>
+                <option value="MEDICAL">Medical Emergency</option>
+                <option value="FLOOD">Flash Flood</option>
+                <option value="BUILDING_COLLAPSE">Structural Collapse</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="em-priority">Priority Level</label>
+              <select id="em-priority" class="form-control">
+                <option value="CRITICAL">Critical</option>
+                <option value="HIGH" selected>High</option>
+                <option value="MEDIUM">Medium</option>
+                <option value="LOW">Low</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="em-node">Target Graph Node</label>
+            <select id="em-node" class="form-control" required>
+              <option value="">Loading graph nodes...</option>
+            </select>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="em-severity">Severity (1-5)</label>
+              <input type="number" id="em-severity" class="form-control" min="1" max="5" value="3" required>
+            </div>
+            <div class="form-group">
+              <label for="em-injured">Casualties / Injured</label>
+              <input type="number" id="em-injured" class="form-control" min="0" max="100" value="1" required>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="em-lat">Latitude</label>
+              <input type="text" id="em-lat" class="form-control" readonly>
+            </div>
+            <div class="form-group">
+              <label for="em-lon">Longitude</label>
+              <input type="text" id="em-lon" class="form-control" readonly>
+            </div>
+          </div>
+
+          <button type="submit" class="btn-primary">
+            <span>🚨</span> DISPATCH EMERGENCY
+          </button>
+        </form>
+      </div>
+
+      <!-- Road Network & Blockage Controls -->
+      <div class="card" style="flex: 1;">
+        <div class="card-header">
+          <h2><span>🚧</span> Road Network Controls</h2>
+          <span class="badge-counter" id="road-count-badge">9 Roads</span>
+        </div>
+        <div class="road-list" id="road-list-container">
+          <div class="empty-state">Loading road edges...</div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Column 2: Interactive City Graph & Dynamic Reroute Alert -->
+    <section class="center-col">
+      
+      <!-- Dynamic Reroute Alert Banner -->
+      <div id="reroute-banner" class="reroute-banner">
+        <div class="reroute-content">
+          <span class="reroute-icon">⚠️</span>
+          <div class="reroute-text">
+            <div id="reroute-text">Dynamic Reroute Recalculation Alert</div>
+            <div id="reroute-path" class="reroute-path">Recalculating Dijkstra shortest path...</div>
+          </div>
+        </div>
+        <button id="reroute-close-btn" class="reroute-close-btn" title="Dismiss Alert">&times;</button>
+      </div>
+
+      <!-- Real Interactive Map Viewport (Leaflet + OSM) -->
+      <div class="map-container">
+        <div class="graph-overlay-info">
+          <span><strong>METRO:</strong> Pune Urban Zone</span>
+          <span><strong>ROUTING:</strong> C++ Dijkstra (Sole Authority)</span>
+        </div>
+
+        <div id="city-map" class="city-map"></div>
+
+        <div class="graph-legend">
+          <div class="legend-item">
+            <div class="legend-color open"></div>
+            <span>Open Road</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color blocked"></div>
+            <span>Blocked Road</span>
+          </div>
+          <div class="legend-item">
+            <div class="legend-color route"></div>
+            <span>Active C++ Route</span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+    <!-- Column 3: Triage Queues, Fleet Monitor & Event Log -->
+    <section class="col-panel right-col">
+      
+      <!-- Triage & Priority Queue -->
+      <div class="card">
+        <div class="card-header">
+          <h2><span>📊</span> Priority Triage Queue</h2>
+        </div>
+        <div class="queue-table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Type</th>
+                <th>Node</th>
+                <th>Priority</th>
+                <th>Unit</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="queue-table-body">
+              <tr>
+                <td colspan="6" class="empty-state">Loading incidents...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Response Fleet Status -->
+      <div class="card">
+        <div class="card-header">
+          <h2><span>🚑</span> Response Fleet Status</h2>
+        </div>
+        <div class="fleet-grid" id="fleet-cards-container">
+          <div class="empty-state">Loading response units...</div>
+        </div>
+      </div>
+
+      <!-- Real-Time Audit / Event Log -->
+      <div class="card" style="flex: 1;">
+        <div class="card-header">
+          <h2><span>⚡</span> Real-Time Audit Log</h2>
+        </div>
+        <div class="event-log-box" id="event-log-box">
+          <div class="event-log-entry">
+            <span class="event-time">[SYS]</span>
+            <span class="event-type-tag info">[BOOT]</span>
+            <span>Operator Console initialized. Connecting to WebSocket bus...</span>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <!-- Client-Side Vanilla JS & Leaflet Modules -->
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/websocket.js"></script>
+  <script src="js/map.js"></script>
+  <script src="js/dashboard.js"></script>
+
+</body>
+</html>

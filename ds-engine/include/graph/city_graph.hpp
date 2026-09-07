@@ -32,6 +32,16 @@ public:
     [[nodiscard]] bool containsNode(const std::string& nodeId) const;
     [[nodiscard]] bool containsRoad(const std::string& roadId) const;
 
+    template <typename Visitor>
+    void forEachNode(Visitor visitor) const {
+        vertices_.forEach([&](const std::string&, const GraphVertex& v) { visitor(v); });
+    }
+
+    template <typename Visitor>
+    void forEachRoad(Visitor visitor) const {
+        roads_.forEach([&](const std::string&, const Road& r) { visitor(r); });
+    }
+
 private:
     HashTable<std::string, GraphVertex> vertices_;
     HashTable<std::string, Road> roads_;
