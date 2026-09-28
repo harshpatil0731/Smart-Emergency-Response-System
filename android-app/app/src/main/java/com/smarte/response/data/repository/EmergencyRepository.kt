@@ -215,7 +215,8 @@ class EmergencyRepository(
                         if (cur != null) {
                             _activeAssignment.value = cur.copy(
                                 routeDistanceKm = newReroute.totalDistanceKm,
-                                routeNodes = newReroute.nodeIds
+                                routeNodes = newReroute.nodeIds,
+                                etaMinutes = newReroute.etaMinutes
                             )
                         }
                         _rerouteAlert.value = newReroute

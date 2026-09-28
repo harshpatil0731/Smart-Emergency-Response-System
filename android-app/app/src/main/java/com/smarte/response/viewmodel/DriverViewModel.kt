@@ -65,6 +65,9 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
     val connectionState: StateFlow<ConnectionStatus> = repository.connectionStatus
 
     private var locationSyncJob: Job? = null
+    private var currentAssignmentId: String? = null
+    private var baselineRouteDistance: Double? = null
+    private var baselineEtaMinutes: Int? = null
 
     init {
         // Collect team updates from repository
@@ -99,8 +102,13 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
                 _rerouteAlert.value = reroute
                 if (reroute != null) {
                     triggerAlertFeedback()
+                    baselineRouteDistance = reroute.newDistance
+                    baselineEtaMinutes = reroute.newEta
                     val resolvedNodes = resolveNodes(reroute.newRoute)
                     locationManager.updateDemoRoute(resolvedNodes)
+                    if (locationManager.isDemoMode.value) {
+                        updateRemainingTransitMetrics(locationManager.demoNodeIndex.value)
+                    }
                 }
             }
         }
@@ -110,11 +118,23 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
             repository.activeAssignment.collect { assignment ->
                 _activeAssignment.value = assignment
                 if (assignment != null) {
+                    if (baselineRouteDistance == null || currentAssignmentId != assignment.id) {
+                        currentAssignmentId = assignment.id
+                        baselineRouteDistance = assignment.routeDistanceKm
+                        baselineEtaMinutes = assignment.etaMinutes
+                    }
                     val resolved = resolveNodes(assignment.route)
                     locationManager.updateDemoRoute(resolved)
+                    if (locationManager.isDemoMode.value) {
+                        updateRemainingTransitMetrics(locationManager.demoNodeIndex.value)
+                    }
                     if (_currentScreen.value != AppScreen.ActiveTransit) {
                         _currentScreen.value = AppScreen.ActiveTransit
                     }
+                } else {
+                    currentAssignmentId = null
+                    baselineRouteDistance = null
+                    baselineEtaMinutes = null
                 }
             }
         }
@@ -176,6 +196,9 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
         locationSyncJob?.cancel()
         locationManager.stopGpsUpdates()
         repository.logout()
+        currentAssignmentId = null
+        baselineRouteDistance = null
+        baselineEtaMinutes = null
         _selectedTeam.value = null
         _activeAssignment.value = null
         _activeEmergency.value = null
@@ -233,6 +256,9 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
             if (success) {
                 _statusMessage.value = "Emergency successfully resolved"
                 _currentScreen.value = AppScreen.Dashboard
+                currentAssignmentId = null
+                baselineRouteDistance = null
+                baselineEtaMinutes = null
                 locationManager.setDemoMode(false)
             } else {
                 _errorMessage.value = "Failed to complete emergency"
@@ -253,11 +279,25 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
     fun setDemoMode(enabled: Boolean) {
         val routeNodes = resolveNodes(_activeAssignment.value?.route ?: emptyList())
         locationManager.setDemoMode(enabled, routeNodes)
+        if (enabled) {
+            updateRemainingTransitMetrics(0)
+        } else {
+            val cur = _activeAssignment.value
+            val baseDist = baselineRouteDistance
+            val baseEta = baselineEtaMinutes
+            if (cur != null && baseDist != null && baseEta != null) {
+                _activeAssignment.value = cur.copy(
+                    routeDistanceKm = baseDist,
+                    etaMinutes = baseEta
+                )
+            }
+        }
     }
 
     fun stepDemoForward() {
         val node = locationManager.stepNextDemoNode()
         if (node != null) {
+            updateRemainingTransitMetrics(locationManager.demoNodeIndex.value)
             _statusMessage.value = "Advanced to node " + node.id + " (" + node.displayName + ")"
         }
     }
@@ -265,8 +305,85 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
     fun stepDemoBackward() {
         val node = locationManager.stepPrevDemoNode()
         if (node != null) {
+            updateRemainingTransitMetrics(locationManager.demoNodeIndex.value)
             _statusMessage.value = "Back to node " + node.id + " (" + node.displayName + ")"
         }
+    }
+
+    private fun updateRemainingTransitMetrics(currentIndex: Int) {
+        val curAsg = _activeAssignment.value ?: return
+        val routeNodes = resolveNodes(curAsg.route)
+        if (routeNodes.isEmpty()) return
+
+        val fullDist = baselineRouteDistance ?: curAsg.routeDistanceKm
+        val teamType = _selectedTeam.value?.type
+
+        val (remDist, remEta) = calculateRemainingDistanceAndEta(
+            nodes = routeNodes,
+            currentIndex = currentIndex,
+            fullDistance = fullDist,
+            teamType = teamType
+        )
+
+        _activeAssignment.value = curAsg.copy(
+            routeDistanceKm = remDist,
+            etaMinutes = remEta
+        )
+    }
+
+    private fun calculateRemainingDistanceAndEta(
+        nodes: List<CityNode>,
+        currentIndex: Int,
+        fullDistance: Double,
+        teamType: String?
+    ): Pair<Double, Int> {
+        if (nodes.isEmpty() || currentIndex >= nodes.size - 1) {
+            return Pair(0.0, 0)
+        }
+        if (currentIndex <= 0) {
+            val speed = getSpeedForTeam(teamType)
+            val eta = baselineEtaMinutes ?: Math.max(1, Math.ceil((fullDistance * 1.1 / speed) * 60.0).toInt())
+            return Pair(fullDistance, eta)
+        }
+
+        val segmentLengths = mutableListOf<Double>()
+        var totalHaversine = 0.0
+        for (i in 0 until nodes.size - 1) {
+            val dist = haversineDistanceKm(nodes[i].lat, nodes[i].lon, nodes[i + 1].lat, nodes[i + 1].lon)
+            segmentLengths.add(dist)
+            totalHaversine += dist
+        }
+
+        val scale = if (totalHaversine > 0.001 && fullDistance > 0.0) fullDistance / totalHaversine else 1.0
+
+        var remainingDist = 0.0
+        for (i in currentIndex until segmentLengths.size) {
+            remainingDist += segmentLengths[i] * scale
+        }
+
+        val speed = getSpeedForTeam(teamType)
+        val remainingEta = if (remainingDist <= 0.05) 0 else Math.max(1, Math.ceil((remainingDist * 1.1 / speed) * 60.0).toInt())
+        val roundedDist = Math.round(remainingDist * 100.0) / 100.0
+        return Pair(roundedDist, remainingEta)
+    }
+
+    private fun getSpeedForTeam(teamType: String?): Double {
+        return when (teamType?.uppercase()) {
+            "FIRE_BRIGADE", "FIRE" -> 40.0
+            "RESCUE_TEAM", "RESCUE" -> 42.0
+            else -> 50.0
+        }
+    }
+
+    private fun haversineDistanceKm(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6371.0
+        val dLat = Math.toRadians(lat2 - lat1)
+        val dLon = Math.toRadians(lon2 - lon1)
+        val a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2)
+        val c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+        return r * c
     }
 
     fun resolveNodes(nodeIds: List<String>): List<CityNode> {

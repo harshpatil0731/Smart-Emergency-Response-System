@@ -234,6 +234,7 @@ class CityMapController {
           <div class="popup-detail">Assignment ID: <code>${asg.id}</code></div>
           <div class="popup-detail">Dispatched Unit: <strong>${asg.teamId}</strong> &rarr; Incident: <strong>${asg.emergencyId}</strong></div>
           <div class="popup-detail">Shortest Path Distance: <strong>${asg.routeDistanceKm} km</strong></div>
+          ${asg.etaMinutes ? `<div class="popup-detail">Estimated ETA: <strong style="color: #00e5ff;">${asg.etaMinutes} min</strong></div>` : ''}
           <div class="popup-detail" style="margin-top: 4px; font-size: 0.72rem; color: #94a3b8;">
             <strong>Path:</strong><br>${pathText}
           </div>

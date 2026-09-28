@@ -113,10 +113,95 @@ function broadcast(msg) {
   });
 }
 
+// Configurable emergency vehicle base speeds (km/h)
+const VEHICLE_BASE_SPEEDS = {
+  AMBULANCE: 50,      // Ambulance: 50 km/h
+  FIRE_BRIGADE: 40,   // Fire Brigade: 40 km/h
+  FIRE: 40,
+  RESCUE_TEAM: 42,    // Rescue Team: 42 km/h
+  RESCUE: 42,
+  DEFAULT: 45
+};
+
+// Deterministic road/traffic condition factors
+// 1.0 = normal/clear, 1.1-1.2 = moderate, 1.3 = heavy traffic
+const ROAD_TRAFFIC_FACTORS = {
+  'R_AB': 1.0,
+  'R_BC': 1.2,
+  'R_CD': 1.1,
+  'R_DE': 1.0,
+  'R_EA': 1.3,
+  'R_EF': 1.0,
+  'R_FA': 1.1,
+  'R_FG': 1.2,
+  'R_GA': 1.0
+};
+
+// Registry of known roads for lookup and traffic calculations
+const knownRoads = new Map();
+
+function findRoadBetween(u, v) {
+  for (const road of knownRoads.values()) {
+    if ((road.u === u && road.v === v) || (road.u === v && road.v === u)) {
+      return road;
+    }
+  }
+  return null;
+}
+
+function calculateRouteEta(nodeIds, totalDistanceKm, teamType = 'DEFAULT') {
+  if (!totalDistanceKm || totalDistanceKm <= 0) return 0;
+
+  const speed = VEHICLE_BASE_SPEEDS[teamType] || VEHICLE_BASE_SPEEDS['DEFAULT'] || 45;
+
+  if (Array.isArray(nodeIds) && nodeIds.length >= 2) {
+    let totalHours = 0;
+    for (let i = 0; i < nodeIds.length - 1; i++) {
+      const u = nodeIds[i];
+      const v = nodeIds[i + 1];
+      const road = findRoadBetween(u, v);
+      if (road) {
+        const factor = road.trafficFactor || ROAD_TRAFFIC_FACTORS[road.id] || 1.0;
+        totalHours += (road.distanceKm * factor) / speed;
+      }
+    }
+    if (totalHours > 0) {
+      return Math.max(1, Math.ceil(totalHours * 60));
+    }
+  }
+
+  // Fallback if individual segment links are not matched
+  const defaultFactor = 1.1;
+  const minutes = Math.ceil(((totalDistanceKm * defaultFactor) / speed) * 60);
+  return Math.max(1, minutes);
+}
+
+function enrichSnapshot(snapshot) {
+  if (!snapshot) return snapshot;
+
+  const teamTypeMap = new Map();
+  if (snapshot.teams) {
+    snapshot.teams.forEach(t => teamTypeMap.set(t.id, t.type));
+  }
+
+  if (snapshot.assignments) {
+    snapshot.assignments.forEach(a => {
+      const teamType = teamTypeMap.get(a.teamId) || 'DEFAULT';
+      const eta = calculateRouteEta(a.routeNodes, a.routeDistanceKm, teamType);
+      a.etaMinutes = eta;
+      a.distance = a.routeDistanceKm;
+      a.route = a.routeNodes;
+    });
+  }
+
+  return snapshot;
+}
+
 wss.on('connection', async (ws) => {
   console.log('[WebSocket] Client connected');
   try {
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     ws.send(JSON.stringify({ type: 'INITIAL_STATE', data: snapshot }));
   } catch (e) {
     console.error('[WebSocket] Error sending initial snapshot:', e.message);
@@ -155,6 +240,13 @@ async function seedDefaultCity() {
   ];
 
   for (const r of roads) {
+    knownRoads.set(r.id, {
+      id: r.id,
+      u: r.u,
+      v: r.v,
+      distanceKm: r.distanceKm,
+      trafficFactor: ROAD_TRAFFIC_FACTORS[r.id] || 1.0
+    });
     await sendToEngine({ cmd: 'ADD_ROAD', id: r.id, u: r.u, v: r.v, distanceKm: r.distanceKm });
   }
 
@@ -187,7 +279,8 @@ async function seedDefaultCity() {
 // Get snapshot of all engine entities
 app.get('/api/state', async (req, res) => {
   try {
-    const data = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const data = enrichSnapshot(raw);
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -198,7 +291,8 @@ app.get('/api/state', async (req, res) => {
 app.get('/api/teams/:id', async (req, res) => {
   try {
     const teamId = req.params.id;
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     const team = snapshot.teams ? snapshot.teams.find(t => t.id === teamId) : null;
     if (!team) {
       return res.status(404).json({ success: false, error: `Team ${teamId} not found` });
@@ -233,7 +327,18 @@ app.post('/api/emergencies', async (req, res) => {
       severity: severity || 3
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
+
+    // Calculate dynamic ETA for allocated route
+    if (result.route) {
+      const team = snapshot.teams ? snapshot.teams.find(t => t.id === result.allocatedTeamId) : null;
+      const teamType = team ? team.type : 'DEFAULT';
+      const eta = calculateRouteEta(result.route.nodeIds, result.route.totalDistanceKm, teamType);
+      result.route.etaMinutes = eta;
+      result.etaMinutes = eta;
+    }
+
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'EMERGENCY_REPORTED',
@@ -253,13 +358,58 @@ app.post('/api/roads/:id/status', async (req, res) => {
   try {
     const roadId = req.params.id;
     const { status } = req.body; // 'BLOCKED' or 'OPEN'
+
+    // Capture pre-block active assignment details to log old route, distance, and ETA
+    let oldRoute = [];
+    let oldDistance = 0;
+    let oldEta = 0;
+    let teamType = 'DEFAULT';
+
+    try {
+      const preSnapshotRaw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+      const preSnapshot = enrichSnapshot(preSnapshotRaw);
+      if (preSnapshot.assignments) {
+        const activeAsg = preSnapshot.assignments.find(a => 
+          a.status !== 'COMPLETED' && a.status !== 'DECLINED' && a.routeNodes && a.routeNodes.length > 0
+        );
+        if (activeAsg) {
+          oldRoute = activeAsg.routeNodes || [];
+          oldDistance = activeAsg.routeDistanceKm || 0;
+          const assignedTeam = preSnapshot.teams ? preSnapshot.teams.find(t => t.id === activeAsg.teamId) : null;
+          teamType = assignedTeam ? assignedTeam.type : 'DEFAULT';
+          oldEta = activeAsg.etaMinutes || calculateRouteEta(oldRoute, oldDistance, teamType);
+        }
+      }
+    } catch (e) {
+      console.warn('[Backend] Could not capture pre-block snapshot:', e.message);
+    }
+
     const result = await sendToEngine({
       cmd: 'SET_ROAD_STATUS',
       roadId,
       status: status === 'BLOCKED' ? 'BLOCKED' : 'OPEN'
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
+
+    // Dynamic ETA recalculation and explicit console logging
+    let recalculatedEta = 0;
+    if (result.reroute) {
+      recalculatedEta = calculateRouteEta(result.reroute.nodeIds, result.reroute.totalDistanceKm, teamType);
+      result.reroute.etaMinutes = recalculatedEta;
+      result.reroute.newEta = recalculatedEta;
+      result.reroute.newDistance = result.reroute.totalDistanceKm;
+      result.reroute.newRoute = result.reroute.nodeIds;
+
+      console.log(`[Dynamic ETA Reroute]`);
+      console.log(`- Old Route: [${oldRoute.join(' -> ')}]`);
+      console.log(`- Blocked Road: ${roadId}`);
+      console.log(`- New Route: [${result.reroute.nodeIds.join(' -> ')}]`);
+      console.log(`- Old Distance: ${typeof oldDistance === 'number' ? oldDistance.toFixed(2) : oldDistance} km | Old ETA: ${oldEta} mins`);
+      console.log(`- New Distance: ${typeof result.reroute.totalDistanceKm === 'number' ? result.reroute.totalDistanceKm.toFixed(2) : result.reroute.totalDistanceKm} km | Recalculated ETA: ${recalculatedEta} mins`);
+    }
+
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'ROAD_STATUS_CHANGED',
@@ -286,7 +436,8 @@ app.post('/api/teams/:id/status', async (req, res) => {
       status
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'TEAM_STATUS_CHANGED',
@@ -314,7 +465,8 @@ app.post('/api/teams/:id/location', async (req, res) => {
       lon: lon || 0.0
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'TEAM_LOCATION_UPDATED',
@@ -338,7 +490,8 @@ app.post('/api/assignments/:id/accept', async (req, res) => {
       assignmentId: asgId
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'ASSIGNMENT_ACCEPTED',
@@ -361,7 +514,8 @@ app.post('/api/assignments/:id/decline', async (req, res) => {
       assignmentId: asgId
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'ASSIGNMENT_DECLINED',
@@ -384,7 +538,8 @@ app.post('/api/emergencies/:id/complete', async (req, res) => {
       emergencyId: emId
     });
 
-    const snapshot = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+    const snapshot = enrichSnapshot(raw);
     broadcast({
       type: 'SNAPSHOT_UPDATED',
       eventType: 'EMERGENCY_COMPLETED',

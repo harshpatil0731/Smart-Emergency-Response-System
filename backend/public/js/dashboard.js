@@ -133,10 +133,11 @@ document.addEventListener('DOMContentLoaded', () => {
       <span style="font-size: 0.76rem; color: #f1f5f9;">Dijkstra recalculated route from vehicle's current position.</span><br>
       <span style="font-size: 0.72rem; color: #94a3b8; text-decoration: line-through;">Old: ${oldPathStr}</span>
     `;
-    reroutePath.innerHTML = `New C++ Route: <strong>${newPathStr}</strong> (Revised Distance: <strong>${rerouteData.totalDistanceKm} km</strong>)`;
+    const etaNotice = rerouteData.etaMinutes ? ` | Recalculated ETA: <strong>${rerouteData.etaMinutes} min</strong>` : '';
+    reroutePath.innerHTML = `New C++ Route: <strong>${newPathStr}</strong> (Revised Distance: <strong>${rerouteData.totalDistanceKm} km</strong>${etaNotice})`;
 
     rerouteBanner.classList.add('show');
-    addLogEntry('warn', `Dynamic Reroute Triggered! Old: [${oldRouteNodes.join(' -> ')}] -> New: [${rerouteData.nodeIds.join(' -> ')}] (${rerouteData.totalDistanceKm} km)`);
+    addLogEntry('warn', `Dynamic Reroute Triggered! Old: [${oldRouteNodes.join(' -> ')}] -> New: [${rerouteData.nodeIds.join(' -> ')}] (${rerouteData.totalDistanceKm} km${rerouteData.etaMinutes ? `, ETA: ${rerouteData.etaMinutes}m` : ''})`);
 
     if (rerouteTimer) clearTimeout(rerouteTimer);
     rerouteTimer = setTimeout(() => {
@@ -311,8 +312,9 @@ document.addEventListener('DOMContentLoaded', () => {
         ? appState.assignments.find(a => a.id === team.activeAssignmentId)
         : null;
 
+      const etaStr = asg && asg.etaMinutes ? `, ETA: ${asg.etaMinutes}m` : '';
       const missionInfo = asg
-        ? `<span style="color:var(--accent-cyan);">Mission ${asg.emergencyId} (${asg.routeDistanceKm}km)</span>`
+        ? `<span style="color:var(--accent-cyan);">Mission ${asg.emergencyId} (${asg.routeDistanceKm}km${etaStr})</span>`
         : '<span style="color:var(--text-muted);">Standby at station</span>';
 
       card.innerHTML = `
