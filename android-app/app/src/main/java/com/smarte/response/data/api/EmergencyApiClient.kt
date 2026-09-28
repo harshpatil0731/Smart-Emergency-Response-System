@@ -26,6 +26,30 @@ class EmergencyApiClient(
 ) {
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
+    suspend fun testConnection(targetBaseUrl: String): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val validation = AppConfig.validateAndNormalizeUrl(targetBaseUrl)
+            if (validation.isFailure) {
+                return@withContext Result.failure(validation.exceptionOrNull() ?: Exception("Invalid URL"))
+            }
+            val normalized = validation.getOrThrow()
+            val request = Request.Builder()
+                .url("$normalized/api/state")
+                .get()
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                if (response.isSuccessful) {
+                    Result.success("Connected successfully (HTTP ${response.code})")
+                } else {
+                    Result.failure(IOException("Server returned HTTP ${response.code}: ${response.message}"))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(IOException("Cannot reach server: ${e.localizedMessage ?: e.message}"))
+        }
+    }
+
     suspend fun getState(): Result<SnapshotResponse> = withContext(Dispatchers.IO) {
         try {
             val request = Request.Builder()

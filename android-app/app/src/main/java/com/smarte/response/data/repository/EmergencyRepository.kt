@@ -3,6 +3,7 @@ package com.smarte.response.data.repository
 import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
+import com.smarte.response.data.api.AppConfig
 import com.smarte.response.data.api.EmergencyApiClient
 import com.smarte.response.data.model.Assignment
 import com.smarte.response.data.model.CityNode
@@ -73,6 +74,9 @@ class EmergencyRepository(
     val connectionStatus: StateFlow<ConnectionStatus> = webSocketClient.connectionStatus
 
     init {
+        // Guarantee persistent configuration is loaded
+        AppConfig.init(context)
+
         // Collect WebSocket events
         scope.launch {
             webSocketClient.events.collect { event ->
@@ -131,6 +135,25 @@ class EmergencyRepository(
         _incomingAssignment.value = null
         _rerouteAlert.value = null
         webSocketClient.disconnect()
+    }
+
+    suspend fun testServerConnection(url: String): Result<String> {
+        return apiClient.testConnection(url)
+    }
+
+    fun updateBackendUrl(newUrl: String): Result<String> {
+        val res = AppConfig.saveBackendUrl(context, newUrl)
+        if (res.isSuccess) {
+            // Reconnect WebSocket to the newly configured URL if currently in use
+            if (_currentTeamId.value != null || webSocketClient.connectionStatus.value != ConnectionStatus.OFFLINE) {
+                webSocketClient.disconnect()
+                webSocketClient.connect()
+            }
+            scope.launch {
+                refreshSnapshot()
+            }
+        }
+        return res
     }
 
     suspend fun refreshState() {

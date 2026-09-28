@@ -171,6 +171,21 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    suspend fun testConnection(url: String): Result<String> {
+        return repository.testServerConnection(url)
+    }
+
+    fun saveBackendUrl(url: String): Result<String> {
+        val result = repository.updateBackendUrl(url)
+        if (result.isSuccess) {
+            _statusMessage.value = "Backend configured: ${AppConfig.baseUrl}"
+            _errorMessage.value = null
+        } else {
+            _errorMessage.value = result.exceptionOrNull()?.message ?: "Failed to save backend URL"
+        }
+        return result
+    }
+
     fun selectTeam(teamId: String) {
         viewModelScope.launch {
             _isLoading.value = true

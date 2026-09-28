@@ -64,6 +64,8 @@ dependencies {
     // Gson (JSON serialization)
     implementation("com.google.code.gson:gson:2.11.0")
 
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

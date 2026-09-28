@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import com.smarte.response.data.api.AppConfig
 import com.smarte.response.data.model.ResponseTeam
 import com.smarte.response.ui.components.ConnectionIndicator
@@ -143,22 +144,44 @@ fun LoginScreen(viewModel: DriverViewModel) {
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Text(
-            text = "Connected: " + AppConfig.baseUrl,
-            color = TacticalTextMuted,
-            fontSize = 11.sp,
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.Center
-        )
+        Surface(
+            onClick = { showConfigDialog = true },
+            color = TacticalCard,
+            shape = RoundedCornerShape(8.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, TacticalBorder)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "SERVER: " + AppConfig.baseUrl,
+                    color = TacticalTextSecondary,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "CONFIGURE",
+                    color = EmergencyBlue,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = FontFamily.Monospace
+                )
+            }
+        }
     }
 
     if (showConfigDialog) {
         BackendConfigDialog(
             onDismiss = { showConfigDialog = false },
-            onApply = { newHost ->
-                AppConfig.updateServerConfig(context, newHost, AppConfig.DEFAULT_PORT)
+            onApply = { newUrl ->
+                viewModel.saveBackendUrl(newUrl)
                 showConfigDialog = false
                 viewModel.refreshSnapshot()
+            },
+            onTestConnection = { testUrl ->
+                viewModel.testConnection(testUrl)
             }
         )
     }
@@ -230,27 +253,59 @@ fun UnitLoginCard(team: ResponseTeam, onClick: () -> Unit) {
 }
 
 @Composable
-fun BackendConfigDialog(onDismiss: () -> Unit, onApply: (String) -> Unit) {
-    var hostInput by remember { mutableStateOf(AppConfig.serverHost) }
+fun BackendConfigDialog(
+    onDismiss: () -> Unit,
+    onApply: (String) -> Unit,
+    onTestConnection: suspend (String) -> Result<String>
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var urlInput by remember { mutableStateOf(AppConfig.baseUrl) }
+    var validationError by remember { mutableStateOf<String?>(null) }
+    var isTesting by remember { mutableStateOf(false) }
+    var testResultMessage by remember { mutableStateOf<String?>(null) }
+    var isTestSuccess by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = TacticalSurface,
         title = {
-            Text("Backend Host Config", color = TacticalTextPrimary, fontFamily = FontFamily.Monospace)
+            Text(
+                text = "Backend Server Config",
+                color = TacticalTextPrimary,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp
+            )
         },
         text = {
-            Column {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
-                    "Set IP or host for backend server (e.g. 10.0.2.2 for emulator, 192.168.x.x for physical device):",
+                    text = "Configure Node.js backend server. Value is persistently saved across app restarts and process recreation.",
                     color = TacticalTextSecondary,
-                    fontSize = 13.sp
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Active: " + AppConfig.baseUrl,
+                    color = TacticalTextMuted,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+
                 Spacer(modifier = Modifier.height(12.dp))
+
                 OutlinedTextField(
-                    value = hostInput,
-                    onValueChange = { hostInput = it },
-                    label = { Text("Server Host / IP", color = TacticalTextSecondary) },
+                    value = urlInput,
+                    onValueChange = {
+                        urlInput = it
+                        validationError = null
+                        testResultMessage = null
+                    },
+                    label = { Text("Server Base URL or Host:Port", color = TacticalTextSecondary) },
+                    placeholder = { Text("e.g. 192.168.1.13:4000 or 10.0.2.2:4000", color = TacticalTextMuted) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = TacticalTextPrimary,
@@ -260,19 +315,122 @@ fun BackendConfigDialog(onDismiss: () -> Unit, onApply: (String) -> Unit) {
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Presets for quick convenience
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AssistChip(
+                        onClick = {
+                            urlInput = "http://10.0.2.2:4000"
+                            validationError = null
+                            testResultMessage = null
+                        },
+                        label = { Text("Emulator", fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                    )
+                    AssistChip(
+                        onClick = {
+                            urlInput = "http://192.168.1.13:4000"
+                            validationError = null
+                            testResultMessage = null
+                        },
+                        label = { Text("PC LAN", fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                    )
+                    AssistChip(
+                        onClick = {
+                            urlInput = "http://127.0.0.1:4000"
+                            validationError = null
+                            testResultMessage = null
+                        },
+                        label = { Text("Localhost", fontSize = 10.sp, fontFamily = FontFamily.Monospace) }
+                    )
+                }
+
+                if (validationError != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = validationError ?: "",
+                        color = EmergencyRed,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                if (testResultMessage != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = testResultMessage ?: "",
+                        color = if (isTestSuccess) EmergencyGreen else EmergencyRed,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Test Connection Button
+                OutlinedButton(
+                    onClick = {
+                        val valid = AppConfig.validateAndNormalizeUrl(urlInput)
+                        if (valid.isFailure) {
+                            validationError = valid.exceptionOrNull()?.message ?: "Invalid URL format"
+                            return@OutlinedButton
+                        }
+                        validationError = null
+                        isTesting = true
+                        testResultMessage = null
+                        coroutineScope.launch {
+                            val res = onTestConnection(valid.getOrThrow())
+                            isTesting = false
+                            isTestSuccess = res.isSuccess
+                            testResultMessage = if (res.isSuccess) {
+                                res.getOrThrow()
+                            } else {
+                                res.exceptionOrNull()?.message ?: "Connection failed"
+                            }
+                        }
+                    },
+                    enabled = !isTesting,
+                    border = androidx.compose.foundation.BorderStroke(1.dp, EmergencyBlue),
+                    shape = RoundedCornerShape(6.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isTesting) {
+                        CircularProgressIndicator(
+                            color = EmergencyBlue,
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("TESTING...", color = EmergencyBlue, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    } else {
+                        Text("TEST CONNECTION", color = EmergencyBlue, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+                    }
+                }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onApply(hostInput.trim()) },
-                colors = ButtonDefaults.buttonColors(containerColor = EmergencyBlue)
+                onClick = {
+                    val valid = AppConfig.validateAndNormalizeUrl(urlInput)
+                    if (valid.isSuccess) {
+                        onApply(valid.getOrThrow())
+                    } else {
+                        validationError = valid.exceptionOrNull()?.message ?: "Invalid URL format"
+                    }
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = EmergencyBlue),
+                shape = RoundedCornerShape(6.dp)
             ) {
-                Text("SAVE", color = TacticalBg, fontWeight = FontWeight.Bold)
+                Text("SAVE", color = TacticalBg, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("CANCEL", color = TacticalTextSecondary)
+                Text("CANCEL", color = TacticalTextSecondary, fontFamily = FontFamily.Monospace)
             }
         }
     )
