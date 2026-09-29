@@ -554,8 +554,9 @@ app.post('/api/emergencies/:id/complete', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, async () => {
-  console.log(`[Backend] Emergency Response Server listening on http://localhost:${PORT}`);
+const HOST = process.env.HOST || '0.0.0.0';
+server.listen(PORT, HOST, async () => {
+  console.log(`[Backend] Emergency Response Server listening on http://${HOST}:${PORT}`);
   spawnEngine();
   await seedDefaultCity();
 });
