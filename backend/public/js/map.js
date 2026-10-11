@@ -25,6 +25,14 @@ class CityMapController {
     this.layerEmergencies = L.layerGroup();
     this.layerTeams = L.layerGroup();
 
+    // Map Basemap & Traffic Overlay State
+    this.apiKey = options.apiKey || localStorage.getItem('google_maps_api_key') || '';
+    this.activeBaseLayerName = options.defaultLayer || 'dark';
+    this.isTrafficEnabled = false;
+    this.baseLayers = {};
+    this.trafficLayer = null;
+    this.currentBaseLayer = null;
+
     // Internal indexed cache
     this.nodeMap = new Map(); // id -> { id, lat, lon }
     this.teamMarkers = new Map(); // teamId -> L.marker
@@ -36,6 +44,7 @@ class CityMapController {
     this.onRoadToggle = options.onRoadToggle || null;
     this.onNodeSelect = options.onNodeSelect || null;
     this.onEmergencyResolve = options.onEmergencyResolve || null;
+    this.onLayerChange = options.onLayerChange || null;
 
     this.initMap();
   }
@@ -55,11 +64,11 @@ class CityMapController {
       attributionControl: true
     });
 
-    // OpenStreetMap Standard Tiles with dark tactical styling via CSS
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-    }).addTo(this.map);
+    // Initialize all Google and Tactical basemaps & traffic layer
+    this._initBaseLayers();
+
+    // Set initial active base layer (defaults to 'dark' or option)
+    this.setBaseLayer(this.activeBaseLayerName);
 
     // Add layer groups in order of depth (roads at bottom, routes next, nodes, emergencies, teams on top)
     this.layerRoads.addTo(this.map);
@@ -67,6 +76,202 @@ class CityMapController {
     this.layerNodes.addTo(this.map);
     this.layerEmergencies.addTo(this.map);
     this.layerTeams.addTo(this.map);
+
+    // If API key is present, attempt background load of Google Maps JS SDK
+    if (this.apiKey) {
+      this._loadGoogleMapsSdk(this.apiKey);
+    }
+  }
+
+  _initBaseLayers() {
+    const keyParam = this.apiKey ? `&key=${encodeURIComponent(this.apiKey)}` : '';
+
+    // Create a dedicated pane for traffic overlay above base tiles (200) but below vector paths (400)
+    if (!this.map.getPane('trafficPane')) {
+      const trafficPane = this.map.createPane('trafficPane');
+      trafficPane.style.zIndex = '350';
+    }
+
+    // 1. Tactical Dark (OpenStreetMap with high-contrast mission-control dark filter - no watermark)
+    const darkLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    });
+
+    // 2. Google Satellite Imagery (High-Resolution Aerial)
+    const googleSatellite = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}${keyParam}`, {
+      maxZoom: 21,
+      subdomains: ['0', '1', '2', '3'],
+      attribution: '&copy; <a href="https://maps.google.com">Google Maps</a> Satellite'
+    });
+
+    // 3. Google Satellite Hybrid (Satellite Imagery + Street & Location Labels)
+    const googleHybrid = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}${keyParam}`, {
+      maxZoom: 21,
+      subdomains: ['0', '1', '2', '3'],
+      attribution: '&copy; <a href="https://maps.google.com">Google Maps</a> Hybrid'
+    });
+
+    // 4. Google Streets (Standard Roadmap)
+    const googleStreets = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}${keyParam}`, {
+      maxZoom: 21,
+      subdomains: ['0', '1', '2', '3'],
+      attribution: '&copy; <a href="https://maps.google.com">Google Maps</a> Streets'
+    });
+
+    // 5. Google Terrain (Topography & Relief)
+    const googleTerrain = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}${keyParam}`, {
+      maxZoom: 21,
+      subdomains: ['0', '1', '2', '3'],
+      attribution: '&copy; <a href="https://maps.google.com">Google Maps</a> Terrain'
+    });
+
+    this.baseLayers = {
+      dark: darkLayer,
+      satellite: googleSatellite,
+      hybrid: googleHybrid,
+      streets: googleStreets,
+      terrain: googleTerrain
+    };
+
+    // Google Real-Time Traffic Overlay Layer (Live congestion flows on transparent roads)
+    this.trafficLayer = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=h,traffic&x={x}&y={y}&z={z}${keyParam}`, {
+      maxZoom: 21,
+      subdomains: ['0', '1', '2', '3'],
+      pane: 'trafficPane',
+      opacity: 0.95,
+      attribution: '&copy; <a href="https://maps.google.com">Google</a> Live Traffic'
+    });
+  }
+
+  /**
+   * Switch the active base map layer smoothly.
+   * @param {string} layerName - 'dark' | 'satellite' | 'hybrid' | 'streets' | 'terrain'
+   */
+  setBaseLayer(layerName) {
+    if (!this.baseLayers[layerName]) {
+      console.warn(`[Map] Requested layer '${layerName}' not found. Falling back to 'dark'.`);
+      layerName = 'dark';
+    }
+
+    if (this.currentBaseLayer && this.map.hasLayer(this.currentBaseLayer)) {
+      this.map.removeLayer(this.currentBaseLayer);
+    }
+
+    this.currentBaseLayer = this.baseLayers[layerName];
+    this.currentBaseLayer.addTo(this.map);
+    this.activeBaseLayerName = layerName;
+
+    // Adjust container styling for dark vs satellite high-contrast
+    const container = document.getElementById(this.containerId);
+    if (container) {
+      container.classList.remove('dark-mode', 'satellite-mode');
+      if (layerName === 'dark') {
+        container.classList.add('dark-mode');
+      } else if (layerName === 'satellite' || layerName === 'hybrid') {
+        container.classList.add('satellite-mode');
+      }
+    }
+
+    if (this.onLayerChange) {
+      this.onLayerChange(layerName);
+    }
+  }
+
+  /**
+   * Toggle Real-Time Google Traffic Layer overlay on/off.
+   * @param {boolean} [enable] - Optional explicit boolean state.
+   * @returns {boolean} New traffic active state.
+   */
+  toggleTraffic(enable) {
+    if (typeof enable === 'boolean') {
+      this.isTrafficEnabled = enable;
+    } else {
+      this.isTrafficEnabled = !this.isTrafficEnabled;
+    }
+
+    if (this.isTrafficEnabled) {
+      if (!this.map.hasLayer(this.trafficLayer)) {
+        this.trafficLayer.addTo(this.map);
+      }
+    } else {
+      if (this.map.hasLayer(this.trafficLayer)) {
+        this.map.removeLayer(this.trafficLayer);
+      }
+    }
+
+    return this.isTrafficEnabled;
+  }
+
+  /**
+   * Configure or update Google Maps API Key at runtime.
+   * Reinitializes tile providers with the provided key and persists to localStorage.
+   * @param {string} newKey
+   */
+  setApiKey(newKey) {
+    this.apiKey = (newKey || '').trim();
+    if (this.apiKey) {
+      localStorage.setItem('google_maps_api_key', this.apiKey);
+      this._loadGoogleMapsSdk(this.apiKey);
+    } else {
+      localStorage.removeItem('google_maps_api_key');
+    }
+
+    const currentLayer = this.activeBaseLayerName;
+    const wasTraffic = this.isTrafficEnabled;
+
+    // Clean up current layers
+    if (this.currentBaseLayer && this.map.hasLayer(this.currentBaseLayer)) {
+      this.map.removeLayer(this.currentBaseLayer);
+    }
+    if (this.trafficLayer && this.map.hasLayer(this.trafficLayer)) {
+      this.map.removeLayer(this.trafficLayer);
+    }
+
+    // Reinitialize base layers with updated API key parameter
+    this._initBaseLayers();
+    this.setBaseLayer(currentLayer);
+    if (wasTraffic) {
+      this.toggleTraffic(true);
+    }
+
+    console.log(`[Map] Updated Google Maps API Key: ${this.apiKey ? (this.apiKey.substring(0, 6) + '...') : 'Cleared'}`);
+  }
+
+  hasApiKey() {
+    return Boolean(this.apiKey && this.apiKey.length > 5);
+  }
+
+  getActiveBaseLayer() {
+    return this.activeBaseLayerName;
+  }
+
+  isTrafficActive() {
+    return this.isTrafficEnabled;
+  }
+
+  _loadGoogleMapsSdk(apiKey) {
+    if (!apiKey) return;
+    if (window.google && window.google.maps) {
+      console.log('[Map] Google Maps JavaScript SDK already active');
+      return;
+    }
+    const scriptId = 'google-maps-js-sdk';
+    let script = document.getElementById(scriptId);
+    if (script) script.remove();
+
+    script = document.createElement('script');
+    script.id = scriptId;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&libraries=places,traffic`;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => {
+      console.log('[Map] Official Google Maps JS Platform SDK loaded successfully.');
+    };
+    script.onerror = (e) => {
+      console.warn('[Map] Note: Google Maps JS SDK load warning (tile layer still operating):', e);
+    };
+    document.head.appendChild(script);
   }
 
   // Update entire map state from snapshot
@@ -320,19 +525,31 @@ class CityMapController {
   }
 
   _renderTeams(teams, assignments) {
-    this.layerTeams.clearLayers();
-    this.teamMarkers.clear();
+    // Only active (non-OFFLINE) response teams belong on the live tactical map
+    const activeTeams = (teams || []).filter(t => t && t.status && t.status.toUpperCase() !== 'OFFLINE');
+    const activeTeamIds = new Set(activeTeams.map(t => t.id));
 
-    teams.forEach((team, index) => {
+    // 1. Remove markers for units that have logged out, gone offline, or are no longer active
+    for (const [teamId, marker] of this.teamMarkers.entries()) {
+      if (!activeTeamIds.has(teamId)) {
+        this.layerTeams.removeLayer(marker);
+        this.teamMarkers.delete(teamId);
+      }
+    }
+
+    // 2. Add or update markers for active units
+    activeTeams.forEach((team, index) => {
       const node = this.nodeMap.get(team.nodeId);
       // Determine position from team lat/lon or station node coordinates
       let tLat = (team.lat && team.lat !== 0) ? team.lat : (node ? node.lat : 18.5204);
       let tLon = (team.lon && team.lon !== 0) ? team.lon : (node ? node.lon : 73.8567);
 
       // Slight radial offset so multiple teams at same station are visible
-      const angle = (index * (2 * Math.PI / teams.length)) - (Math.PI / 2);
-      tLat += 0.0018 * Math.sin(angle);
-      tLon += 0.0018 * Math.cos(angle);
+      if (activeTeams.length > 1) {
+        const angle = (index * (2 * Math.PI / activeTeams.length)) - (Math.PI / 2);
+        tLat += 0.0018 * Math.sin(angle);
+        tLon += 0.0018 * Math.cos(angle);
+      }
 
       let iconEmoji = '🚑';
       if (team.type === 'FIRE_BRIGADE') iconEmoji = '🚒';
@@ -354,8 +571,6 @@ class CityMapController {
         iconAnchor: [22, 14]
       });
 
-      const marker = L.marker([tLat, tLon], { icon: customIcon, zIndexOffset: 500 });
-
       // Active assignment details
       const asg = (team.activeAssignmentId && assignments)
         ? assignments.find(a => a.id === team.activeAssignmentId)
@@ -365,20 +580,51 @@ class CityMapController {
         ? `<span style="color:#00e5ff;">Assigned to ${asg.emergencyId} (${asg.routeDistanceKm} km)</span>`
         : '<span style="color:#10b981;">Standby at Station</span>';
 
+      const driverInfo = team.driverName
+        ? `<div class="popup-detail">Driver: <strong>${team.driverName}</strong> ${team.vehicleNumber ? `(${team.vehicleNumber})` : ''}</div>`
+        : '';
+      const locationText = team.locationName || (team.nodeId ? team.nodeId.replace(/_/g, ' ') : 'N/A');
+
       const popupHtml = `
         <div class="map-popup team-popup">
           <div class="popup-title"><strong>${iconEmoji} Unit ${team.id}</strong></div>
           <div class="popup-detail">Type: <strong>${team.type}</strong></div>
           <div class="popup-detail">Status: <span class="team-status-pill ${sClass}">${team.status}</span></div>
-          <div class="popup-detail">Station Node: <strong>${team.nodeId ? team.nodeId.replace(/_/g, ' ') : 'N/A'}</strong></div>
+          ${driverInfo}
+          <div class="popup-detail">Location: <strong>${locationText}</strong></div>
           <div class="popup-detail">Mission: ${missionText}</div>
         </div>
       `;
-      marker.bindPopup(popupHtml);
 
-      this.teamMarkers.set(team.id, marker);
-      this.layerTeams.addLayer(marker);
+      let marker = this.teamMarkers.get(team.id);
+      if (marker) {
+        // Update existing marker
+        marker.setLatLng([tLat, tLon]);
+        marker.setIcon(customIcon);
+        marker.setPopupContent(popupHtml);
+      } else {
+        // Create and register new marker
+        marker = L.marker([tLat, tLon], { icon: customIcon, zIndexOffset: 500 });
+        marker.bindPopup(popupHtml);
+        this.teamMarkers.set(team.id, marker);
+        this.layerTeams.addLayer(marker);
+      }
     });
+  }
+
+  // Remove individual team marker from map when logged out or taken offline
+  removeTeamMarker(teamId) {
+    const marker = this.teamMarkers.get(teamId);
+    if (marker) {
+      this.layerTeams.removeLayer(marker);
+      this.teamMarkers.delete(teamId);
+      console.log(`[Map] Removed marker for unit ${teamId}`);
+    }
+  }
+
+  // Check whether a team marker currently exists on map
+  hasTeamMarker(teamId) {
+    return this.teamMarkers.has(teamId);
   }
 
   // Update vehicle position dynamically on WebSocket event without reloading map

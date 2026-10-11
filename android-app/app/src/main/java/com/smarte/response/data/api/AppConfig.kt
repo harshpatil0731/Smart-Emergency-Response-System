@@ -191,7 +191,14 @@ object AppConfig {
                 return Result.failure(IllegalArgumentException("Invalid host/IP address: '$cleaned'"))
             }
 
-            val port = if (uri.port != -1) uri.port else DEFAULT_PORT
+            val isHttps = scheme == "https"
+            val port = when {
+                uri.port != -1 -> uri.port
+                isHttps -> 443
+                host == "10.0.2.2" || host == "localhost" || host == "127.0.0.1" || host.startsWith("192.168.") -> DEFAULT_PORT
+                else -> DEFAULT_PORT
+            }
+
             if (port !in 1..65535) {
                 return Result.failure(IllegalArgumentException("Port must be between 1 and 65535 (got $port)"))
             }
@@ -202,7 +209,14 @@ object AppConfig {
                 ""
             }
 
-            val normalized = "$scheme://$host:$port$path"
+            // Omit default port 443 for HTTPS and 80 for HTTP for clean URL formatting
+            val portPart = when {
+                isHttps && port == 443 -> ""
+                !isHttps && port == 80 -> ""
+                else -> ":$port"
+            }
+
+            val normalized = "$scheme://$host$portPart$path"
             Result.success(normalized)
         } catch (e: Exception) {
             Result.failure(IllegalArgumentException("Malformed server URL: ${e.localizedMessage ?: e.message}"))

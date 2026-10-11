@@ -17,13 +17,31 @@ import java.util.concurrent.TimeUnit
  * HTTP REST Client interfacing directly with Node.js Express backend.
  */
 class EmergencyApiClient(
-    private val client: OkHttpClient = OkHttpClient.Builder()
+    customClient: OkHttpClient? = null,
+    private val gson: Gson = Gson()
+) {
+    @Volatile
+    private var authToken: String? = null
+
+    fun setAuthToken(token: String?) {
+        authToken = token
+    }
+
+    private val client: OkHttpClient = customClient ?: OkHttpClient.Builder()
         .connectTimeout(5, TimeUnit.SECONDS)
         .readTimeout(8, TimeUnit.SECONDS)
         .writeTimeout(8, TimeUnit.SECONDS)
-        .build(),
-    private val gson: Gson = Gson()
-) {
+        .addInterceptor { chain ->
+            val orig = chain.request()
+            val token = authToken
+            val builder = orig.newBuilder()
+            if (!token.isNullOrBlank()) {
+                builder.header("Authorization", "Bearer $token")
+            }
+            chain.proceed(builder.build())
+        }
+        .build()
+
     private val jsonMediaType = "application/json; charset=utf-8".toMediaType()
 
     suspend fun testConnection(targetBaseUrl: String): Result<String> = withContext(Dispatchers.IO) {
@@ -133,6 +151,115 @@ class EmergencyApiClient(
                     Result.success(result)
                 } else {
                     Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Failed to update location")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun registerDriverAccount(requestData: com.smarte.response.data.model.DriverRegisterRequest): Result<com.smarte.response.data.model.DriverAuthResponse> = withContext(Dispatchers.IO) {
+        try {
+            val body = gson.toJson(requestData).toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(AppConfig.baseUrl + "/api/drivers/register")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val result = gson.fromJson(bodyStr, com.smarte.response.data.model.DriverAuthResponse::class.java)
+                if (response.isSuccessful && result.success) {
+                    Result.success(result)
+                } else {
+                    Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Registration failed")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun loginDriver(requestData: com.smarte.response.data.model.DriverLoginRequest): Result<com.smarte.response.data.model.DriverAuthResponse> = withContext(Dispatchers.IO) {
+        try {
+            val body = gson.toJson(requestData).toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(AppConfig.baseUrl + "/api/drivers/login")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val result = gson.fromJson(bodyStr, com.smarte.response.data.model.DriverAuthResponse::class.java)
+                if (response.isSuccessful && result.success) {
+                    Result.success(result)
+                } else {
+                    Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Login failed")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun activateDriver(requestData: com.smarte.response.data.model.DriverActivateRequest): Result<com.smarte.response.data.model.RegisterTeamResponse> = withContext(Dispatchers.IO) {
+        try {
+            val body = gson.toJson(requestData).toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(AppConfig.baseUrl + "/api/drivers/activate")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val result = gson.fromJson(bodyStr, com.smarte.response.data.model.RegisterTeamResponse::class.java)
+                if (response.isSuccessful && result.success) {
+                    Result.success(result)
+                } else {
+                    Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Activation failed")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun registerTeam(requestData: com.smarte.response.data.model.RegisterTeamRequest): Result<com.smarte.response.data.model.RegisterTeamResponse> = withContext(Dispatchers.IO) {
+        try {
+            val body = gson.toJson(requestData).toRequestBody(jsonMediaType)
+            val request = Request.Builder()
+                .url(AppConfig.baseUrl + "/api/teams/register")
+                .post(body)
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val result = gson.fromJson(bodyStr, com.smarte.response.data.model.RegisterTeamResponse::class.java)
+                if (response.isSuccessful && result.success) {
+                    Result.success(result)
+                } else {
+                    Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Registration failed")))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun logoutTeam(teamId: String): Result<GenericResponse> = withContext(Dispatchers.IO) {
+        try {
+            val request = Request.Builder()
+                .url(AppConfig.baseUrl + "/api/teams/" + teamId + "/logout")
+                .post("{}".toRequestBody(jsonMediaType))
+                .build()
+
+            client.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string() ?: ""
+                val result = gson.fromJson(bodyStr, GenericResponse::class.java)
+                if (response.isSuccessful) {
+                    Result.success(result ?: GenericResponse(success = true))
+                } else {
+                    Result.failure(IOException(result?.error ?: ("HTTP " + response.code + ": Logout failed")))
                 }
             }
         } catch (e: Exception) {

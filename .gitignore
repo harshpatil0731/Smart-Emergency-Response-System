@@ -27,6 +27,8 @@ __pycache__/
 *.py[cod]
 venv/
 .env
+backend/.env
+*.env
 
 # OS and IDE files
 .vscode/
@@ -42,3 +44,7 @@ android-app/local.properties
 
 # Temporary project workspace
 scratch/
+backend/.storage/
+.storage/
+*.drivers.json
+.drivers.json

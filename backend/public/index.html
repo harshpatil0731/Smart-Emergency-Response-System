@@ -3,8 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart Emergency Response System - Operator Mission Control</title>
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Outfit:wght@500;600;700;800;900&family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/dashboard.css">
 </head>
 <body>
@@ -121,7 +123,7 @@
       <div class="card" style="flex: 1;">
         <div class="card-header">
           <h2><span>🚧</span> Road Network Controls</h2>
-          <span class="badge-counter" id="road-count-badge">9 Roads</span>
+          <span class="badge-counter" id="road-count-badge">19 Roads</span>
         </div>
         <div class="road-list" id="road-list-container">
           <div class="empty-state">Loading road edges...</div>
@@ -145,27 +147,58 @@
         <button id="reroute-close-btn" class="reroute-close-btn" title="Dismiss Alert">&times;</button>
       </div>
 
-      <!-- Real Interactive Map Viewport (Leaflet + OSM) -->
+      <!-- Real Interactive Map Viewport (Leaflet + Google Maps / OSM) -->
       <div class="map-container">
-        <div class="graph-overlay-info">
-          <span><strong>METRO:</strong> Pune Urban Zone</span>
-          <span><strong>ROUTING:</strong> C++ Dijkstra (Sole Authority)</span>
+        <!-- Floating Tactical Map Controls Toolbar -->
+        <div class="map-toolbar">
+          <!-- Layer Switcher Group -->
+          <div class="map-toolbar-group layer-selector-group">
+            <button type="button" class="map-tool-btn active" data-layer="dark" title="Tactical Dark Mode">
+              <span>🌑</span> Dark
+            </button>
+            <button type="button" class="map-tool-btn" data-layer="satellite" title="Google Satellite Imagery">
+              <span>🛰️</span> Satellite
+            </button>
+            <button type="button" class="map-tool-btn" data-layer="hybrid" title="Google Satellite + Road Labels">
+              <span>🛰️</span> Hybrid
+            </button>
+            <button type="button" class="map-tool-btn" data-layer="streets" title="Google Streets Roadmap">
+              <span>🗺️</span> Streets
+            </button>
+            <button type="button" class="map-tool-btn" data-layer="terrain" title="Google Topographic Terrain">
+              <span>⛰️</span> Terrain
+            </button>
+          </div>
+
+          <!-- Live Real-Time Traffic Toggle -->
+          <button type="button" id="btn-toggle-traffic" class="map-tool-btn traffic-btn" title="Toggle Real-Time Google Traffic Layer">
+            <span class="traffic-pulse-icon">🚦</span>
+            <span class="traffic-label">Traffic: <strong id="traffic-status-text">OFF</strong></span>
+          </button>
         </div>
 
-        <div id="city-map" class="city-map"></div>
+        <div id="city-map" class="city-map dark-mode"></div>
 
-        <div class="graph-legend">
-          <div class="legend-item">
-            <div class="legend-color open"></div>
-            <span>Open Road</span>
+        <!-- Bottom HUD: Road Legend & C++ Engine Authority Info -->
+        <div class="map-bottom-hud">
+          <div class="graph-legend">
+            <div class="legend-item">
+              <div class="legend-color open"></div>
+              <span>Open Road</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color blocked"></div>
+              <span>Blocked Road</span>
+            </div>
+            <div class="legend-item">
+              <div class="legend-color route"></div>
+              <span>Active C++ Route</span>
+            </div>
           </div>
-          <div class="legend-item">
-            <div class="legend-color blocked"></div>
-            <span>Blocked Road</span>
-          </div>
-          <div class="legend-item">
-            <div class="legend-color route"></div>
-            <span>Active C++ Route</span>
+
+          <div class="graph-overlay-info">
+            <span><strong>METRO:</strong> Pune Urban Zone</span>
+            <span><strong>ROUTING:</strong> C++ Dijkstra</span>
           </div>
         </div>
       </div>
@@ -205,9 +238,10 @@
       <div class="card">
         <div class="card-header">
           <h2><span>🚑</span> Response Fleet Status</h2>
+          <span class="badge-counter" id="fleet-count-badge">0 Units</span>
         </div>
         <div class="fleet-grid" id="fleet-cards-container">
-          <div class="empty-state">Loading response units...</div>
+          <div class="empty-state">No response units registered</div>
         </div>
       </div>
 

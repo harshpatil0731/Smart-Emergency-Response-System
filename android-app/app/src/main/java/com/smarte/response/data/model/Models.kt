@@ -14,11 +14,15 @@ data class ResponseTeam(
     val lat: Double? = 0.0,
     @SerializedName("lon", alternate = ["lng"]) val lon: Double? = 0.0,
     val name: String? = null,
-    val baseStation: String? = null
+    val baseStation: String? = null,
+    val driverName: String? = null,
+    val vehicleNumber: String? = null,
+    val locationType: String? = null,
+    val locationName: String? = null
 ) {
     val teamId: String get() = id
-    val displayName: String get() = name ?: (id + " - " + typeDisplayName)
-    val station: String get() = baseStation ?: nodeId ?: "STATION"
+    val displayName: String get() = if (!driverName.isNullOrBlank()) "$id - $driverName ($typeDisplayName)" else (name ?: "$id - $typeDisplayName")
+    val station: String get() = locationName ?: baseStation ?: nodeId ?: "STATION"
     val isAvailable: Boolean get() = status.equals("AVAILABLE", ignoreCase = true)
     val isBusy: Boolean get() = status.equals("BUSY", ignoreCase = true)
     val isOffline: Boolean get() = status.equals("OFFLINE", ignoreCase = true)
@@ -37,6 +41,86 @@ data class ResponseTeam(
             else -> "Ambulance"
         }
 }
+
+/**
+ * Driver Account Profile retrieved after Mobile + Password login.
+ */
+data class DriverAccount(
+    val mobileNumber: String = "",
+    val driverName: String = "",
+    val role: String = "",
+    val roleDisplay: String = "",
+    val vehicleNumber: String = "",
+    val unitId: String = ""
+)
+
+/**
+ * Driver Registration request payload (first-time account creation).
+ */
+data class DriverRegisterRequest(
+    val mobileNumber: String,
+    val password: String,
+    val confirmPassword: String? = null,
+    val driverName: String,
+    val role: String,
+    val vehicleNumber: String,
+    val locationType: String? = null,
+    val lat: Double? = null,
+    val lon: Double? = null
+)
+
+/**
+ * Driver Login request payload (Mobile Number + Password).
+ */
+data class DriverLoginRequest(
+    val mobileNumber: String,
+    val password: String
+)
+
+/**
+ * Driver Auth Response returned from backend for registration and login.
+ */
+data class DriverAuthResponse(
+    val success: Boolean = false,
+    val driver: DriverAccount? = null,
+    val isOnline: Boolean = false,
+    val team: ResponseTeam? = null,
+    val token: String? = null,
+    val error: String? = null
+)
+
+/**
+ * Driver Unit Activation request (selecting location and going online).
+ */
+data class DriverActivateRequest(
+    val mobileNumber: String? = null,
+    val unitId: String? = null,
+    val locationType: String,
+    val lat: Double? = null,
+    val lon: Double? = null
+)
+
+/**
+ * Legacy / direct unit registration request payload.
+ */
+data class RegisterTeamRequest(
+    val role: String,
+    val driverName: String,
+    val vehicleNumber: String,
+    val locationType: String,
+    val lat: Double? = null,
+    val lon: Double? = null
+)
+
+/**
+ * Registration response payload returned from backend.
+ */
+data class RegisterTeamResponse(
+    val success: Boolean = false,
+    val unitId: String? = null,
+    val team: ResponseTeam? = null,
+    val error: String? = null
+)
 
 /**
  * Emergency incident entity matching backend schema.

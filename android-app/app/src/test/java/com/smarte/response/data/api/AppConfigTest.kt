@@ -50,6 +50,14 @@ class AppConfigTest {
     }
 
     @Test
+    fun testStandardHttpsWithoutPortProducesWss() {
+        val result = AppConfig.validateAndNormalizeUrl("https://emergency.example.com")
+        assertTrue(result.isSuccess)
+        assertEquals("https://emergency.example.com", result.getOrThrow())
+        assertEquals("wss://emergency.example.com/ws", AppConfig.getWsUrlFromBaseUrl(result.getOrThrow()))
+    }
+
+    @Test
     fun testEmptyUrlRejected() {
         val result = AppConfig.validateAndNormalizeUrl("   ")
         assertTrue(result.isFailure)

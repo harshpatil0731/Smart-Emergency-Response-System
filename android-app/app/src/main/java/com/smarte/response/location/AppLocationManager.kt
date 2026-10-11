@@ -43,9 +43,44 @@ class AppLocationManager(private val context: Context) {
         override fun onProviderDisabled(provider: String) {}
     }
 
+    fun hasLocationPermission(): Boolean {
+        val fineGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        val coarseGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            android.Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        return fineGranted || coarseGranted
+    }
+
+    fun isLocationEnabled(): Boolean {
+        val hasGps = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
+        val hasNetwork = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true
+        return hasGps || hasNetwork
+    }
+
+    @SuppressLint("MissingPermission")
+    fun getBestLastKnownLocation(): Pair<Double, Double>? {
+        if (!hasLocationPermission()) return null
+        try {
+            val lastGps = locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            val lastNet = locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+            val best = lastGps ?: lastNet
+            if (best != null) {
+                _currentLocation.value = Pair(best.latitude, best.longitude)
+                _currentAccuracy.value = best.accuracy
+                return Pair(best.latitude, best.longitude)
+            }
+        } catch (_: Exception) {}
+        return _currentLocation.value
+    }
+
     @SuppressLint("MissingPermission")
     fun startGpsUpdates() {
         if (_isDemoMode.value) return
+        if (!hasLocationPermission()) return
         try {
             val hasGps = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
             val hasNetwork = locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true

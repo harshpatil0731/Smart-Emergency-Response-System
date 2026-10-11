@@ -68,6 +68,21 @@ const Api = {
     });
   },
 
+  // Register a response team dynamically
+  async registerTeam(teamData) {
+    return this.request('/api/teams/register', {
+      method: 'POST',
+      body: JSON.stringify(teamData)
+    });
+  },
+
+  // Logout a response team
+  async logoutTeam(teamId) {
+    return this.request(`/api/teams/${encodeURIComponent(teamId)}/logout`, {
+      method: 'POST'
+    });
+  },
+
   // Update team location (GPS / Node ID)
   async setTeamLocation(teamId, nodeId, lat = 0, lon = 0) {
     return this.request(`/api/teams/${encodeURIComponent(teamId)}/location`, {
@@ -94,6 +109,19 @@ const Api = {
   async completeEmergency(emergencyId) {
     return this.request(`/api/emergencies/${encodeURIComponent(emergencyId)}/complete`, {
       method: 'POST'
+    });
+  },
+
+  // Get system & map configuration (including Google Maps API key)
+  async getConfig() {
+    return this.request('/api/config');
+  },
+
+  // Save system & map configuration
+  async saveConfig(config) {
+    return this.request('/api/config', {
+      method: 'POST',
+      body: JSON.stringify(config)
     });
   }
 };

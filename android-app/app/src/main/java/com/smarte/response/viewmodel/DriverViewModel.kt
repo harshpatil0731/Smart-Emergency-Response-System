@@ -23,6 +23,12 @@ sealed class AppScreen {
     object ActiveTransit : AppScreen()
 }
 
+enum class AuthStage {
+    LOGIN,
+    REGISTER,
+    SELECT_LOCATION
+}
+
 class DriverViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = EmergencyRepository(application.applicationContext)
@@ -31,6 +37,17 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
     // UI States
     private val _currentScreen = MutableStateFlow<AppScreen>(AppScreen.Login)
     val currentScreen: StateFlow<AppScreen> = _currentScreen.asStateFlow()
+
+    val driverAccount: StateFlow<DriverAccount?> = repository.driverAccount
+
+    private val _authStage = MutableStateFlow<AuthStage>(
+        if (repository.driverAccount.value != null && repository.activeTeam.value == null) {
+            AuthStage.SELECT_LOCATION
+        } else {
+            AuthStage.LOGIN
+        }
+    )
+    val authStage: StateFlow<AuthStage> = _authStage.asStateFlow()
 
     private val _selectedTeam = MutableStateFlow<ResponseTeam?>(null)
     val selectedTeam: StateFlow<ResponseTeam?> = _selectedTeam.asStateFlow()
@@ -186,6 +203,175 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
         return result
     }
 
+    fun setAuthStage(stage: AuthStage) {
+        _authStage.value = stage
+        _errorMessage.value = null
+    }
+
+    fun switchAccount() {
+        repository.clearSavedDriverAccount()
+        _authStage.value = AuthStage.LOGIN
+        _errorMessage.value = null
+    }
+
+    fun loginDriver(mobileNumber: String, password: String) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+            val result = repository.loginDriver(
+                DriverLoginRequest(
+                    mobileNumber = mobileNumber.trim(),
+                    password = password.trim()
+                )
+            )
+            if (result.isSuccess) {
+                val auth = result.getOrNull()
+                if (auth?.isOnline == true && auth.team != null) {
+                    _selectedTeam.value = auth.team
+                    _statusMessage.value = "Welcome back ${auth.driver?.driverName ?: "Driver"}! Unit ${auth.team.teamId} is online."
+                    _currentScreen.value = AppScreen.Dashboard
+                    if (auth.team.locationType.equals("CURRENT_LOCATION", ignoreCase = true)) {
+                        locationManager.startGpsUpdates()
+                        startLocationSyncLoop()
+                    }
+                } else {
+                    _statusMessage.value = "Driver verified: ${auth?.driver?.driverName} (${auth?.driver?.unitId})"
+                    _authStage.value = AuthStage.SELECT_LOCATION
+                }
+            } else {
+                _errorMessage.value = result.exceptionOrNull()?.message ?: "Login failed"
+            }
+            _isLoading.value = false
+        }
+    }
+
+    fun registerDriverAccount(
+        role: String,
+        driverName: String,
+        mobileNumber: String,
+        password: String,
+        confirmPassword: String? = null,
+        vehicleNumber: String,
+        locationType: String? = null,
+        gpsLat: Double? = null,
+        gpsLon: Double? = null
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+
+            if (confirmPassword != null && password.trim() != confirmPassword.trim()) {
+                _errorMessage.value = "Passwords do not match."
+                _isLoading.value = false
+                return@launch
+            }
+
+            val result = repository.registerDriverAccount(
+                DriverRegisterRequest(
+                    role = role,
+                    driverName = driverName.trim(),
+                    mobileNumber = mobileNumber.trim(),
+                    password = password.trim(),
+                    confirmPassword = confirmPassword?.trim(),
+                    vehicleNumber = vehicleNumber.trim().uppercase(),
+                    locationType = locationType,
+                    lat = gpsLat,
+                    lon = gpsLon
+                )
+            )
+            if (result.isSuccess) {
+                val auth = result.getOrNull()
+                val driver = auth?.driver
+                _statusMessage.value = "Account created! Assigned Unit: ${driver?.unitId}"
+
+                // If location was selected on registration, activate and go online directly
+                if (!locationType.isNullOrBlank()) {
+                    activateUnitAndGoOnline(locationType, gpsLat, gpsLon)
+                } else {
+                    _authStage.value = AuthStage.SELECT_LOCATION
+                }
+            } else {
+                _errorMessage.value = result.exceptionOrNull()?.message ?: "Registration failed"
+            }
+            _isLoading.value = false
+        }
+    }
+
+    fun activateUnitAndGoOnline(
+        locationType: String,
+        gpsLat: Double? = null,
+        gpsLon: Double? = null
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+            val result = repository.activateDriverUnit(
+                locationType = locationType,
+                lat = gpsLat,
+                lon = gpsLon
+            )
+            if (result.isSuccess) {
+                val team = result.getOrNull()
+                _selectedTeam.value = team
+                _statusMessage.value = "Unit ${team?.teamId} is online & ready for dispatch!"
+                _currentScreen.value = AppScreen.Dashboard
+
+                if (locationType.equals("CURRENT_LOCATION", ignoreCase = true)) {
+                    locationManager.setDemoMode(false)
+                    locationManager.startGpsUpdates()
+                    startLocationSyncLoop()
+                } else {
+                    locationManager.stopGpsUpdates()
+                }
+            } else {
+                _errorMessage.value = result.exceptionOrNull()?.message ?: "Failed to mark unit online"
+            }
+            _isLoading.value = false
+        }
+    }
+
+    fun registerDriver(
+        role: String,
+        driverName: String,
+        vehicleNumber: String,
+        locationType: String,
+        gpsLat: Double? = null,
+        gpsLon: Double? = null
+    ) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _errorMessage.value = null
+            val req = com.smarte.response.data.model.RegisterTeamRequest(
+                role = role,
+                driverName = driverName,
+                vehicleNumber = vehicleNumber,
+                locationType = locationType,
+                lat = gpsLat,
+                lon = gpsLon
+            )
+            val result = repository.registerTeam(req)
+            if (result.isSuccess) {
+                val team = result.getOrNull()
+                _selectedTeam.value = team
+                _statusMessage.value = "Unit ${team?.teamId} registered successfully!"
+                _currentScreen.value = AppScreen.Dashboard
+
+                // If registered with CURRENT_LOCATION, enable continuous GPS tracking
+                if (locationType.equals("CURRENT_LOCATION", ignoreCase = true)) {
+                    locationManager.setDemoMode(false)
+                    locationManager.startGpsUpdates()
+                    startLocationSyncLoop()
+                } else {
+                    // For predefined demo locations, set demo mode with the fixed location
+                    locationManager.stopGpsUpdates()
+                }
+            } else {
+                _errorMessage.value = result.exceptionOrNull()?.message ?: "Failed to register unit"
+            }
+            _isLoading.value = false
+        }
+    }
+
     fun selectTeam(teamId: String) {
         viewModelScope.launch {
             _isLoading.value = true
@@ -198,8 +384,10 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
                 } else {
                     _currentScreen.value = AppScreen.Dashboard
                 }
-                locationManager.startGpsUpdates()
-                startLocationSyncLoop()
+                if (team?.locationType.equals("CURRENT_LOCATION", ignoreCase = true)) {
+                    locationManager.startGpsUpdates()
+                    startLocationSyncLoop()
+                }
             } else {
                 _errorMessage.value = "Failed to load details for unit " + teamId
             }
@@ -219,6 +407,7 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
         _activeEmergency.value = null
         _pendingAssignment.value = null
         _currentScreen.value = AppScreen.Login
+        _authStage.value = if (repository.driverAccount.value != null) AuthStage.SELECT_LOCATION else AuthStage.LOGIN
     }
 
     fun toggleStatus(newStatus: String) {

@@ -1,14 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Allow cleartext HTTP during local prototype development and emulation -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-    </domain-config>
-    <base-config cleartextTrafficPermitted="true">
+    <!-- Base Configuration: Prevent unrestricted cleartext HTTP in production.
+         Public servers and domain names must use HTTPS / WSS with valid system certificates. -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+
+    <!-- Local Development & Testing Domain Exceptions:
+         Allow cleartext HTTP specifically for local loopback, Android Emulator host,
+         and private LAN development servers during testing. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.2.2</domain>
+        <domain includeSubdomains="true">localhost</domain>
+        <domain includeSubdomains="true">127.0.0.1</domain>
+        <!-- Common local private WiFi subnets for physical device development -->
+        <domain includeSubdomains="true">192.168.1.1</domain>
+        <domain includeSubdomains="true">192.168.0.1</domain>
+    </domain-config>
 </network-security-config>

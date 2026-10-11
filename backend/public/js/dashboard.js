@@ -71,6 +71,49 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Map Toolbar & Google Maps Layer / Key Controls
+  // Map Toolbar: Layer Switcher & Traffic Toggle (API Key loaded from backend/.env)
+  function initMapToolbarControls() {
+    const layerButtons = document.querySelectorAll('.map-tool-btn[data-layer]');
+    const btnToggleTraffic = document.getElementById('btn-toggle-traffic');
+    const trafficStatusText = document.getElementById('traffic-status-text');
+
+    // 1. Layer switcher buttons (Dark, Satellite, Hybrid, Streets, Terrain)
+    layerButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetLayer = btn.dataset.layer;
+        layerButtons.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        cityMap.setBaseLayer(targetLayer);
+        addLogEntry('info', `Switched map basemap to ${targetLayer.toUpperCase()}`);
+      });
+    });
+
+    // 2. Real-time traffic toggle
+    if (btnToggleTraffic) {
+      btnToggleTraffic.addEventListener('click', () => {
+        const isTrafficOn = cityMap.toggleTraffic();
+        btnToggleTraffic.classList.toggle('active', isTrafficOn);
+        if (trafficStatusText) {
+          trafficStatusText.textContent = isTrafficOn ? 'ON' : 'OFF';
+        }
+        addLogEntry(isTrafficOn ? 'success' : 'info', `Real-time Google Traffic layer ${isTrafficOn ? 'ACTIVATED' : 'DISABLED'}`);
+      });
+    }
+
+    // 3. Initial backend sync: Automatically configure API key from backend/.env
+    Api.getConfig().then(cfg => {
+      if (cfg && cfg.googleMapsApiKey) {
+        cityMap.setApiKey(cfg.googleMapsApiKey);
+        addLogEntry('info', 'Google Maps API Key loaded from backend/.env');
+      }
+    }).catch(err => {
+      console.warn('[Dashboard] Config fetch warning:', err.message);
+    });
+  }
+
+  initMapToolbarControls();
+
   // Global helper for popups
   window.dashboard = {
     selectNode: (nodeId) => {
@@ -194,6 +237,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function renderRoadControls() {
     roadListContainer.innerHTML = '';
+    const roadCountBadge = document.getElementById('road-count-badge');
+    if (roadCountBadge) {
+      roadCountBadge.textContent = `${appState.roads.length} Roads`;
+    }
     if (appState.roads.length === 0) {
       roadListContainer.innerHTML = '<div class="empty-state">No roads configured</div>';
       return;
@@ -290,14 +337,23 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const fleetCountBadge = document.getElementById('fleet-count-badge');
+
   function renderFleetStatus() {
     fleetCardsContainer.innerHTML = '';
-    if (appState.teams.length === 0) {
-      fleetCardsContainer.innerHTML = '<div class="empty-state">No units registered</div>';
+
+    const activeTeams = appState.teams ? appState.teams.filter(t => t.status !== 'OFFLINE') : [];
+    if (fleetCountBadge) {
+      const count = activeTeams.length;
+      fleetCountBadge.textContent = `${count} ${count === 1 ? 'Unit' : 'Units'}`;
+    }
+
+    if (activeTeams.length === 0) {
+      fleetCardsContainer.innerHTML = '<div class="empty-state">No active response units registered</div>';
       return;
     }
 
-    appState.teams.forEach(team => {
+    activeTeams.forEach(team => {
       const card = document.createElement('div');
       card.className = 'team-card';
 
@@ -314,8 +370,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const etaStr = asg && asg.etaMinutes ? `, ETA: ${asg.etaMinutes}m` : '';
       const missionInfo = asg
-        ? `<span style="color:var(--accent-cyan);">Mission ${asg.emergencyId} (${asg.routeDistanceKm}km${etaStr})</span>`
-        : '<span style="color:var(--text-muted);">Standby at station</span>';
+        ? `<span style="color:var(--accent-cyan); font-weight:600;">Mission ${asg.emergencyId} (${asg.routeDistanceKm}km${etaStr})</span>`
+        : '<span style="color:var(--accent-green);">Standby Ready</span>';
+
+      const driverLine = team.driverName
+        ? `<div><strong>Driver:</strong> ${team.driverName} ${team.vehicleNumber ? `<span style="color:var(--text-muted); font-family:var(--font-mono);">(${team.vehicleNumber})</span>` : ''}</div>`
+        : '';
+
+      const locName = team.locationName || (team.nodeId ? team.nodeId.replace(/_/g, ' ') : 'N/A');
+      const coordsText = (team.lat && team.lon) ? ` <span style="color:var(--text-muted); font-size:0.65rem;">[${team.lat.toFixed(4)}, ${team.lon.toFixed(4)}]</span>` : '';
 
       card.innerHTML = `
         <div class="team-card-header">
@@ -323,8 +386,9 @@ document.addEventListener('DOMContentLoaded', () => {
           <span class="team-status-pill ${sClass}">${team.status}</span>
         </div>
         <div class="team-details">
-          <div><strong>Station:</strong> ${team.nodeId.replace(/_/g, ' ')}</div>
-          <div><strong>Status:</strong> ${missionInfo}</div>
+          ${driverLine}
+          <div><strong>Location:</strong> ${locName}${coordsText}</div>
+          <div><strong>Assignment:</strong> ${missionInfo}</div>
         </div>
         <div class="team-actions">
           <button class="btn-mini status-toggle" data-team="${team.id}">
@@ -463,6 +527,17 @@ document.addEventListener('DOMContentLoaded', () => {
         addLogEntry('info', `Assignment ${msg.assignmentId} accepted by unit.`);
       } else if (msg.eventType === 'ASSIGNMENT_DECLINED') {
         addLogEntry('warn', `Assignment ${msg.assignmentId} declined! Unit freed, incident requeued in Heap.`);
+      } else if (msg.eventType === 'TEAM_REGISTERED') {
+        const teamInfo = msg.team || {};
+        addLogEntry('success', `New Unit Registered: ${msg.teamId} (${teamInfo.type || 'UNIT'}) - Driver: ${teamInfo.driverName || 'N/A'}`);
+      } else if (msg.eventType === 'TEAM_LOGGED_OUT') {
+        addLogEntry('warn', `Unit ${msg.teamId} logged out of service.`);
+        if (cityMap) cityMap.removeTeamMarker(msg.teamId);
+      } else if (msg.eventType === 'TEAM_STATUS_CHANGED') {
+        addLogEntry('info', `Unit ${msg.teamId} status changed to ${msg.status}`);
+        if (msg.status === 'OFFLINE' && cityMap) {
+          cityMap.removeTeamMarker(msg.teamId);
+        }
       } else if (msg.eventType === 'EMERGENCY_COMPLETED') {
         addLogEntry('success', `Emergency ${msg.emergencyId} marked COMPLETED.`);
       }

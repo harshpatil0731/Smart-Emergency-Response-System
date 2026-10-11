@@ -40,6 +40,57 @@ class EmergencyRepository(
     private val _currentTeamId = MutableStateFlow<String?>(prefs.getString("selected_team_id", null))
     val currentTeamId: StateFlow<String?> = _currentTeamId.asStateFlow()
 
+    // Authenticated Driver Account Profile
+    private val _driverAccount = MutableStateFlow<com.smarte.response.data.model.DriverAccount?>(loadSavedDriverAccount())
+    val driverAccount: StateFlow<com.smarte.response.data.model.DriverAccount?> = _driverAccount.asStateFlow()
+
+    private fun loadSavedDriverAccount(): com.smarte.response.data.model.DriverAccount? {
+        val mobile = prefs.getString("driver_mobile", null) ?: return null
+        val name = prefs.getString("driver_name", "") ?: ""
+        val role = prefs.getString("driver_role", "") ?: ""
+        val roleDisplay = prefs.getString("driver_role_display", "") ?: ""
+        val vehicle = prefs.getString("driver_vehicle", "") ?: ""
+        val unit = prefs.getString("driver_unit", "") ?: ""
+        return com.smarte.response.data.model.DriverAccount(
+            mobileNumber = mobile,
+            driverName = name,
+            role = role,
+            roleDisplay = roleDisplay,
+            vehicleNumber = vehicle,
+            unitId = unit
+        )
+    }
+
+    fun saveDriverAccount(account: com.smarte.response.data.model.DriverAccount, token: String? = null) {
+        val editor = prefs.edit()
+            .putString("driver_mobile", account.mobileNumber)
+            .putString("driver_name", account.driverName)
+            .putString("driver_role", account.role)
+            .putString("driver_role_display", account.roleDisplay)
+            .putString("driver_vehicle", account.vehicleNumber)
+            .putString("driver_unit", account.unitId)
+        if (!token.isNullOrBlank()) {
+            editor.putString("auth_token", token)
+            apiClient.setAuthToken(token)
+        }
+        editor.apply()
+        _driverAccount.value = account
+    }
+
+    fun clearSavedDriverAccount() {
+        prefs.edit()
+            .remove("driver_mobile")
+            .remove("driver_name")
+            .remove("driver_role")
+            .remove("driver_role_display")
+            .remove("driver_vehicle")
+            .remove("driver_unit")
+            .remove("auth_token")
+            .apply()
+        apiClient.setAuthToken(null)
+        _driverAccount.value = null
+    }
+
     // Current Team Details
     private val _team = MutableStateFlow<ResponseTeam?>(null)
     val team: StateFlow<ResponseTeam?> = _team.asStateFlow()
@@ -76,6 +127,12 @@ class EmergencyRepository(
     init {
         // Guarantee persistent configuration is loaded
         AppConfig.init(context)
+
+        // Restore auth token for secure authenticated requests
+        val savedToken = prefs.getString("auth_token", null)
+        if (!savedToken.isNullOrBlank()) {
+            apiClient.setAuthToken(savedToken)
+        }
 
         // Collect WebSocket events
         scope.launch {
@@ -118,6 +175,96 @@ class EmergencyRepository(
         } else null
     }
 
+    suspend fun registerDriverAccount(requestData: com.smarte.response.data.model.DriverRegisterRequest): Result<com.smarte.response.data.model.DriverAuthResponse> {
+        val res = apiClient.registerDriverAccount(requestData)
+        return if (res.isSuccess) {
+            val authResp = res.getOrNull()
+            val driver = authResp?.driver
+            if (driver != null) {
+                saveDriverAccount(driver, authResp.token)
+                Result.success(authResp)
+            } else {
+                Result.failure(Exception("Driver account creation failed"))
+            }
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Failed to register driver"))
+        }
+    }
+
+    suspend fun loginDriver(requestData: com.smarte.response.data.model.DriverLoginRequest): Result<com.smarte.response.data.model.DriverAuthResponse> {
+        val res = apiClient.loginDriver(requestData)
+        return if (res.isSuccess) {
+            val authResp = res.getOrNull()
+            val driver = authResp?.driver
+            if (driver != null) {
+                saveDriverAccount(driver, authResp.token)
+                if (authResp.isOnline && authResp.team != null) {
+                    _currentTeamId.value = authResp.team.id
+                    prefs.edit().putString("selected_team_id", authResp.team.id).apply()
+                    _team.value = authResp.team
+                    webSocketClient.connect()
+                    refreshSnapshot()
+                }
+                Result.success(authResp)
+            } else {
+                Result.failure(Exception("Driver login failed"))
+            }
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Failed to login"))
+        }
+    }
+
+    suspend fun activateDriverUnit(
+        locationType: String,
+        lat: Double? = null,
+        lon: Double? = null
+    ): Result<ResponseTeam> {
+        val driver = _driverAccount.value ?: return Result.failure(Exception("No active driver account"))
+        val req = com.smarte.response.data.model.DriverActivateRequest(
+            mobileNumber = driver.mobileNumber,
+            unitId = driver.unitId,
+            locationType = locationType,
+            lat = lat,
+            lon = lon
+        )
+        val res = apiClient.activateDriver(req)
+        return if (res.isSuccess) {
+            val team = res.getOrNull()?.team
+            if (team != null) {
+                _currentTeamId.value = team.id
+                prefs.edit().putString("selected_team_id", team.id).apply()
+                _team.value = team
+                webSocketClient.connect()
+                refreshSnapshot()
+                Result.success(team)
+            } else {
+                Result.failure(Exception("Activation did not return team details"))
+            }
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Failed to activate unit"))
+        }
+    }
+
+    suspend fun registerTeam(requestData: com.smarte.response.data.model.RegisterTeamRequest): Result<ResponseTeam> {
+        val res = apiClient.registerTeam(requestData)
+        return if (res.isSuccess) {
+            val regResp = res.getOrNull()
+            val team = regResp?.team
+            if (team != null) {
+                _currentTeamId.value = team.id
+                prefs.edit().putString("selected_team_id", team.id).apply()
+                _team.value = team
+                webSocketClient.connect()
+                refreshSnapshot()
+                Result.success(team)
+            } else {
+                Result.failure(Exception("Registration did not return team details"))
+            }
+        } else {
+            Result.failure(res.exceptionOrNull() ?: Exception("Failed to register unit"))
+        }
+    }
+
     suspend fun selectTeam(teamId: String): Boolean {
         _currentTeamId.value = teamId
         prefs.edit().putString("selected_team_id", teamId).apply()
@@ -127,6 +274,16 @@ class EmergencyRepository(
     }
 
     fun logout() {
+        val teamId = _currentTeamId.value
+        if (teamId != null) {
+            scope.launch {
+                try {
+                    apiClient.logoutTeam(teamId)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Remote logout warning: " + e.message)
+                }
+            }
+        }
         _currentTeamId.value = null
         prefs.edit().remove("selected_team_id").apply()
         _team.value = null
