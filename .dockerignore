@@ -1,0 +1,47 @@
+# Version control & development metadata
+.git
+.gitignore
+.github
+.agents
+.vscode
+.idea
+
+# Secrets and environment configurations (NEVER copy into images)
+*.env
+*.env.*
+!.env.example
+backend/.env
+backend/.env.*
+
+# Local Node.js dependencies & runtime data
+node_modules
+backend/node_modules
+npm-debug.log*
+yarn-debug.log*
+
+# C++ Build outputs, object files, libraries & Windows executables
+build
+bin
+obj
+ds-engine/build
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
+*.obj
+*.o
+.vs
+
+# Android application (client app - not part of backend container)
+android-app
+
+# Temporary and local scratch workspace
+scratch
+backend/.storage
+backend/*.drivers.json
+.storage
+.drivers.json
+
+# Test scripts & test artifacts (not needed for production runtime)
+backend/test_*.js
