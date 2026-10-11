@@ -27,7 +27,7 @@ RUN test -f /src/ds-engine/build/engine_console && chmod +x /src/ds-engine/build
 # ==============================================================================
 # Stage 2: Production Node.js Runtime
 # ==============================================================================
-FROM node:20-slim AS runner
+FROM node:22-slim AS runner
 
 # Create directory for C++ engine executable and backend application
 RUN mkdir -p /app/engine /app/backend
