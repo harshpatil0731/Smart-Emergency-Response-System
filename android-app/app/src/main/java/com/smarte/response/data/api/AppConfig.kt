@@ -24,12 +24,14 @@ object AppConfig {
     private const val KEY_HOST = "server_host"
     private const val KEY_PORT = "server_port"
 
+    const val DEFAULT_PRODUCTION_BASE_URL = "https://smart-emergency-response-system-i8at.onrender.com"
+    const val DEFAULT_PRODUCTION_HOST = "smart-emergency-response-system-i8at.onrender.com"
     const val DEFAULT_EMULATOR_HOST = "10.0.2.2"
     const val DEFAULT_PORT = 4000
     const val DEFAULT_EMULATOR_BASE_URL = "http://10.0.2.2:4000"
 
     @Volatile
-    private var _baseUrl: String = DEFAULT_EMULATOR_BASE_URL
+    private var _baseUrl: String = DEFAULT_PRODUCTION_BASE_URL
 
     @Volatile
     private var isInitialized: Boolean = false
@@ -97,12 +99,12 @@ object AppConfig {
                 prefs.edit().putString(KEY_BASE_URL, migrated).apply()
                 Log.i(TAG, "Migrated legacy host config to: $_baseUrl")
             } else {
-                // FIRST LAUNCH ONLY: initialize with emulator default and persist it
-                _baseUrl = DEFAULT_EMULATOR_BASE_URL
+                // FIRST LAUNCH ONLY: initialize with production Render URL and persist it
+                _baseUrl = DEFAULT_PRODUCTION_BASE_URL
                 prefs.edit()
-                    .putString(KEY_BASE_URL, DEFAULT_EMULATOR_BASE_URL)
-                    .putString(KEY_HOST, DEFAULT_EMULATOR_HOST)
-                    .putInt(KEY_PORT, DEFAULT_PORT)
+                    .putString(KEY_BASE_URL, DEFAULT_PRODUCTION_BASE_URL)
+                    .putString(KEY_HOST, DEFAULT_PRODUCTION_HOST)
+                    .putInt(KEY_PORT, 443)
                     .apply()
                 Log.i(TAG, "First launch detected: initialized default backend URL: $_baseUrl")
             }

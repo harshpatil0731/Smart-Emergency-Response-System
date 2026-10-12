@@ -52,7 +52,7 @@ class SupabaseService {
     }
 
     // Local fallback store for offline development when Supabase credentials or tables are not yet ready
-    this.fallbackDir = path.resolve(__dirname, '..', '.storage');
+    this.fallbackDir = process.env.STORAGE_DIR ? path.resolve(process.env.STORAGE_DIR) : path.resolve(__dirname, '..', '.storage');
     this.fallbackDriversPath = path.resolve(__dirname, '..', '.drivers.json');
     this.fallbackDbPath = path.join(this.fallbackDir, 'local_db.json');
     this.initFallbackStore();
@@ -279,6 +279,18 @@ class SupabaseService {
       // 5. Generate Unit ID based on role
       const unitId = await this.generateNextUnitId(role);
 
+      const PRESET_LOCS = {
+        'DECCAN_GYMKHANA': { lat: 18.5160, lon: 73.8400, nodeId: 'Deccan_Gymkhana_D', name: 'Deccan Gymkhana' },
+        'SHIVAJI_NAGAR': { lat: 18.5310, lon: 73.8446, nodeId: 'Shivaji_Nagar_B', name: 'Shivaji Nagar' },
+        'CAMP_ZONE': { lat: 18.5130, lon: 73.8780, nodeId: 'Camp_Zone_F', name: 'Camp Zone' }
+      };
+      const normLocType = (locationType || 'DECCAN_GYMKHANA').trim().toUpperCase().replace(/\s+/g, '_');
+      const preset = PRESET_LOCS[normLocType] || PRESET_LOCS['DECCAN_GYMKHANA'];
+      const resolvedLat = (lat !== undefined && lat !== null && !isNaN(parseFloat(lat)) && parseFloat(lat) !== 0) ? parseFloat(lat) : preset.lat;
+      const resolvedLon = (lon !== undefined && lon !== null && !isNaN(parseFloat(lon)) && parseFloat(lon) !== 0) ? parseFloat(lon) : preset.lon;
+      const resolvedNodeId = preset.nodeId;
+      const resolvedLocName = preset.name;
+
       // 6. Insert into response_units (starts OFFLINE until driver activates shift)
       const { data: unitRecord, error: unitErr } = await this.adminClient
         .from('response_units')
@@ -287,10 +299,11 @@ class SupabaseService {
           driver_id: authUserId,
           role: role,
           vehicle_number: cleanVehicle,
-          location_type: locationType || 'DECCAN_GYMKHANA',
-          location_name: locationType === 'CAMP_ZONE' ? 'Camp Zone' : (locationType === 'SHIVAJI_NAGAR' ? 'Shivaji Nagar' : 'Deccan Gymkhana'),
-          lat: lat || 18.5160,
-          lon: lon || 73.8400,
+          location_type: normLocType,
+          location_name: resolvedLocName,
+          lat: resolvedLat,
+          lon: resolvedLon,
+          node_id: resolvedNodeId,
           status: 'OFFLINE'
         })
         .select()
@@ -352,16 +365,28 @@ class SupabaseService {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
+      const PRESET_LOCS = {
+        'DECCAN_GYMKHANA': { lat: 18.5160, lon: 73.8400, nodeId: 'Deccan_Gymkhana_D', name: 'Deccan Gymkhana' },
+        'SHIVAJI_NAGAR': { lat: 18.5310, lon: 73.8446, nodeId: 'Shivaji_Nagar_B', name: 'Shivaji Nagar' },
+        'CAMP_ZONE': { lat: 18.5130, lon: 73.8780, nodeId: 'Camp_Zone_F', name: 'Camp Zone' }
+      };
+      const normLocType = (locationType || 'DECCAN_GYMKHANA').trim().toUpperCase().replace(/\s+/g, '_');
+      const preset = PRESET_LOCS[normLocType] || PRESET_LOCS['DECCAN_GYMKHANA'];
+      const resolvedLat = (lat !== undefined && lat !== null && !isNaN(parseFloat(lat)) && parseFloat(lat) !== 0) ? parseFloat(lat) : preset.lat;
+      const resolvedLon = (lon !== undefined && lon !== null && !isNaN(parseFloat(lon)) && parseFloat(lon) !== 0) ? parseFloat(lon) : preset.lon;
+      const resolvedNodeId = preset.nodeId;
+      const resolvedLocName = preset.name;
+
       const newUnit = {
         id: unitId,
         driver_id: driverId,
         role,
         vehicle_number: cleanVehicle,
-        location_type: locationType || 'DECCAN_GYMKHANA',
-        location_name: locationType === 'CAMP_ZONE' ? 'Camp Zone' : (locationType === 'SHIVAJI_NAGAR' ? 'Shivaji Nagar' : 'Deccan Gymkhana'),
-        lat: lat || 18.5160,
-        lon: lon || 73.8400,
-        node_id: 'Deccan_Gymkhana_D',
+        location_type: normLocType,
+        location_name: resolvedLocName,
+        lat: resolvedLat,
+        lon: resolvedLon,
+        node_id: resolvedNodeId,
         status: 'OFFLINE',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -848,6 +873,185 @@ class SupabaseService {
     }
 
     await this.logAuditEvent('ASSIGNMENT_CREATED', id, payload);
+  }
+
+  /**
+   * Accepts an emergency assignment.
+   */
+  async acceptAssignment(assignmentId) {
+    const now = new Date().toISOString();
+
+    if (this.isConfigured()) {
+      let { data: asg } = await this.adminClient
+        .from('assignments')
+        .select('*')
+        .eq('id', assignmentId)
+        .maybeSingle();
+
+      if (!asg) {
+        const { data: unit } = await this.adminClient
+          .from('response_units')
+          .select('*')
+          .eq('active_assignment_id', assignmentId)
+          .maybeSingle();
+        if (unit) {
+          const { data: activeAsg } = await this.adminClient
+            .from('assignments')
+            .select('*')
+            .eq('team_id', unit.id)
+            .neq('status', 'COMPLETED')
+            .neq('status', 'DECLINED')
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (activeAsg) asg = activeAsg;
+        }
+      }
+
+      if (asg) {
+        await this.adminClient
+          .from('assignments')
+          .update({
+            status: 'ACCEPTED',
+            updated_at: now
+          })
+          .eq('id', asg.id);
+
+        await this.adminClient
+          .from('emergencies')
+          .update({
+            status: 'IN_PROGRESS',
+            updated_at: now
+          })
+          .eq('id', asg.emergency_id);
+
+        await this.adminClient
+          .from('response_units')
+          .update({
+            status: 'BUSY',
+            updated_at: now
+          })
+          .eq('id', asg.team_id);
+      }
+    } else {
+      let asg = this.fallbackData.assignments.find(a => a.id === assignmentId);
+      if (!asg) {
+        const unit = this.fallbackData.response_units.find(u => u.active_assignment_id === assignmentId);
+        if (unit) {
+          asg = this.fallbackData.assignments.find(a => a.team_id === unit.id && a.status !== 'COMPLETED' && a.status !== 'DECLINED');
+        }
+      }
+
+      if (asg) {
+        asg.status = 'ACCEPTED';
+        asg.updated_at = now;
+        const em = this.fallbackData.emergencies.find(e => e.id === asg.emergency_id);
+        if (em) {
+          em.status = 'IN_PROGRESS';
+          em.updated_at = now;
+        }
+        const unit = this.fallbackData.response_units.find(u => u.id === asg.team_id);
+        if (unit) {
+          unit.status = 'BUSY';
+          unit.updated_at = now;
+        }
+        this.saveFallbackStore();
+      }
+    }
+
+    await this.logAuditEvent('ASSIGNMENT_ACCEPTED', assignmentId, { acceptedAt: now });
+  }
+
+  /**
+   * Declines an emergency assignment and releases the response unit.
+   */
+  async declineAssignment(assignmentId) {
+    const now = new Date().toISOString();
+
+    if (this.isConfigured()) {
+      let { data: asg } = await this.adminClient
+        .from('assignments')
+        .select('*')
+        .eq('id', assignmentId)
+        .maybeSingle();
+
+      if (!asg) {
+        const { data: unit } = await this.adminClient
+          .from('response_units')
+          .select('*')
+          .eq('active_assignment_id', assignmentId)
+          .maybeSingle();
+        if (unit) {
+          const { data: activeAsg } = await this.adminClient
+            .from('assignments')
+            .select('*')
+            .eq('team_id', unit.id)
+            .neq('status', 'COMPLETED')
+            .neq('status', 'DECLINED')
+            .order('updated_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (activeAsg) asg = activeAsg;
+        }
+      }
+
+      if (asg) {
+        await this.adminClient
+          .from('assignments')
+          .update({
+            status: 'DECLINED',
+            updated_at: now
+          })
+          .eq('id', asg.id);
+
+        await this.adminClient
+          .from('response_units')
+          .update({
+            status: 'AVAILABLE',
+            active_assignment_id: null,
+            updated_at: now
+          })
+          .eq('id', asg.team_id);
+
+        await this.adminClient
+          .from('emergencies')
+          .update({
+            status: 'REPORTED',
+            allocated_team_id: null,
+            updated_at: now
+          })
+          .eq('id', asg.emergency_id)
+          .eq('allocated_team_id', asg.team_id);
+      }
+    } else {
+      let asg = this.fallbackData.assignments.find(a => a.id === assignmentId);
+      if (!asg) {
+        const unit = this.fallbackData.response_units.find(u => u.active_assignment_id === assignmentId);
+        if (unit) {
+          asg = this.fallbackData.assignments.find(a => a.team_id === unit.id && a.status !== 'COMPLETED' && a.status !== 'DECLINED');
+        }
+      }
+
+      if (asg) {
+        asg.status = 'DECLINED';
+        asg.updated_at = now;
+        const unit = this.fallbackData.response_units.find(u => u.id === asg.team_id);
+        if (unit) {
+          unit.status = 'AVAILABLE';
+          unit.active_assignment_id = null;
+          unit.updated_at = now;
+        }
+        const em = this.fallbackData.emergencies.find(e => e.id === asg.emergency_id);
+        if (em && em.allocated_team_id === asg.team_id) {
+          em.status = 'REPORTED';
+          em.allocated_team_id = null;
+          em.updated_at = now;
+        }
+        this.saveFallbackStore();
+      }
+    }
+
+    await this.logAuditEvent('ASSIGNMENT_DECLINED', assignmentId, { declinedAt: now });
   }
 
   /**

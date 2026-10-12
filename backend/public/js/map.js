@@ -597,14 +597,19 @@ class CityMapController {
       `;
 
       let marker = this.teamMarkers.get(team.id);
+      const snapshotTime = team.updatedAt || 0;
       if (marker) {
-        // Update existing marker
-        marker.setLatLng([tLat, tLon]);
+        // Prevent stale snapshot from overwriting newer live marker coordinates
+        if (!marker._lastUpdatedAt || snapshotTime >= marker._lastUpdatedAt) {
+          marker.setLatLng([tLat, tLon]);
+          marker._lastUpdatedAt = snapshotTime;
+        }
         marker.setIcon(customIcon);
         marker.setPopupContent(popupHtml);
       } else {
         // Create and register new marker
         marker = L.marker([tLat, tLon], { icon: customIcon, zIndexOffset: 500 });
+        marker._lastUpdatedAt = snapshotTime;
         marker.bindPopup(popupHtml);
         this.teamMarkers.set(team.id, marker);
         this.layerTeams.addLayer(marker);
@@ -628,10 +633,7 @@ class CityMapController {
   }
 
   // Update vehicle position dynamically on WebSocket event without reloading map
-  updateTeamLocation(teamId, lat, lon, nodeId) {
-    const marker = this.teamMarkers.get(teamId);
-    if (!marker) return;
-
+  updateTeamLocation(teamId, lat, lon, nodeId, timestamp) {
     let targetLat = lat;
     let targetLon = lon;
 
@@ -641,9 +643,48 @@ class CityMapController {
       targetLon = node.lon;
     }
 
-    if (targetLat && targetLon) {
+    if (!targetLat || !targetLon) return;
+
+    const updateTime = timestamp || Date.now();
+    let marker = this.teamMarkers.get(teamId);
+
+    if (marker) {
+      if (marker._lastUpdatedAt && updateTime < marker._lastUpdatedAt) {
+        console.log(`[Map] Discarding stale location update for unit ${teamId}`);
+        return;
+      }
       marker.setLatLng([targetLat, targetLon]);
+      marker._lastUpdatedAt = updateTime;
       console.log(`[Map] Moved unit ${teamId} to [${targetLat}, ${targetLon}]`);
+    } else {
+      // Create and register new marker if not present yet
+      const sClass = 'available';
+      const iconHtml = `
+        <div class="vehicle-marker-icon status-${sClass}" data-team="${teamId}">
+          <span class="vehicle-emoji">🚑</span>
+          <span class="vehicle-tag">${teamId}</span>
+        </div>
+      `;
+      const customIcon = L.divIcon({
+        className: 'custom-vehicle-icon',
+        html: iconHtml,
+        iconSize: [44, 28],
+        iconAnchor: [22, 14]
+      });
+      const popupHtml = `
+        <div class="map-popup team-popup">
+          <div class="popup-title"><strong>🚑 Unit ${teamId}</strong></div>
+          <div class="popup-detail">Status: <span class="team-status-pill ${sClass}">AVAILABLE</span></div>
+          <div class="popup-detail">Location: <strong>${nodeId ? nodeId.replace(/_/g, ' ') : 'Live GPS'}</strong></div>
+          <div class="popup-detail">GPS: ${Number(targetLat).toFixed(4)}, ${Number(targetLon).toFixed(4)}</div>
+        </div>
+      `;
+      marker = L.marker([targetLat, targetLon], { icon: customIcon, zIndexOffset: 500 });
+      marker._lastUpdatedAt = updateTime;
+      marker.bindPopup(popupHtml);
+      this.teamMarkers.set(teamId, marker);
+      this.layerTeams.addLayer(marker);
+      console.log(`[Map] Added unit ${teamId} at [${targetLat}, ${targetLon}]`);
     }
   }
 

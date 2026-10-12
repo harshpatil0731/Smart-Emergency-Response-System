@@ -162,11 +162,13 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
             }
         }
 
-        // Collect location updates to send to backend
+        // Collect location updates to send to backend (only for CURRENT_LOCATION or active transit)
         viewModelScope.launch {
             locationManager.currentLocation.collect { loc ->
                 val team = _selectedTeam.value
-                if (team != null && loc != null) {
+                val isCurrentLoc = team?.locationType?.equals("CURRENT_LOCATION", ignoreCase = true) == true
+                val isBusy = team?.status == "BUSY" || team?.status == "ASSIGNED" || team?.status == "EN_ROUTE"
+                if (team != null && team.status != "OFFLINE" && loc != null && (isCurrentLoc || isBusy)) {
                     repository.sendLocationUpdate(loc.first, loc.second)
                 }
             }
@@ -321,6 +323,7 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
                     locationManager.startGpsUpdates()
                     startLocationSyncLoop()
                 } else {
+                    locationSyncJob?.cancel()
                     locationManager.stopGpsUpdates()
                 }
             } else {
@@ -362,7 +365,7 @@ class DriverViewModel(application: Application) : AndroidViewModel(application) 
                     locationManager.startGpsUpdates()
                     startLocationSyncLoop()
                 } else {
-                    // For predefined demo locations, set demo mode with the fixed location
+                    locationSyncJob?.cancel()
                     locationManager.stopGpsUpdates()
                 }
             } else {

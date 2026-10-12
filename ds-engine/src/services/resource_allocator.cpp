@@ -23,7 +23,7 @@ AllocationDecision ResourceAllocator::selectNearestAvailableTeam(
     AllocationDecision best; best.reason = "No compatible AVAILABLE response team";
     double bestDistance = std::numeric_limits<double>::infinity();
     teams.forEach([&](const std::string&, const ResponseTeam& team) {
-        if (team.status != TeamStatus::AVAILABLE || !ResourceCompatibility::isCompatible(emergency.type, team.type)) return;
+        if (team.status != TeamStatus::AVAILABLE || !ResourceCompatibility::isCompatible(emergency.type, team.type) || emergency.hasDeclined(team.id)) return;
         const double distance = haversineKm(team.currentLocation, emergency.location);
         if (!best.allocated || distance < bestDistance || (distance == bestDistance && team.id < best.teamId)) {
             best.allocated = true; best.teamId = team.id; best.distanceKm = distance; bestDistance = distance; best.reason.clear();

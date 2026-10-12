@@ -263,6 +263,9 @@ int runIpc() {
                     ss << ",\"allocatedTeamId\":\"" << escapeJson(res.allocation->teamId) << "\"";
                     ss << ",\"distanceKm\":" << res.allocation->distanceKm;
                 }
+                if (!res.assignmentId.empty()) {
+                    ss << ",\"assignmentId\":\"" << escapeJson(res.assignmentId) << "\"";
+                }
                 if (res.route) {
                     ss << ",\"route\":{\"totalDistanceKm\":" << res.route->totalDistanceKm << ",\"nodeIds\":[";
                     for (size_t i = 0; i < res.route->nodeIds.size(); ++i) {
@@ -313,13 +316,78 @@ int runIpc() {
             std::string asgId = extractString(line, "assignmentId");
             engine.submit(emergency::AssignmentAccepted{asgId, currentTimestamp()});
             auto results = engine.processAllPendingEvents();
-            sendResponse("{\"success\":true,\"cmd\":\"ACCEPT_ASSIGNMENT\",\"assignmentId\":\"" + escapeJson(asgId) + "\"}", reqId);
+            bool overallSuccess = true;
+            std::string errMsg;
+            for (const auto& res : results) {
+                if (!res.success) {
+                    overallSuccess = false;
+                    errMsg = res.error;
+                    break;
+                }
+            }
+            if (!overallSuccess) {
+                sendResponse("{\"success\":false,\"cmd\":\"ACCEPT_ASSIGNMENT\",\"assignmentId\":\"" + escapeJson(asgId) + "\",\"error\":\"" + escapeJson(errMsg) + "\"}", reqId);
+            } else {
+                sendResponse("{\"success\":true,\"cmd\":\"ACCEPT_ASSIGNMENT\",\"assignmentId\":\"" + escapeJson(asgId) + "\"}", reqId);
+            }
         }
         else if (cmd == "DECLINE_ASSIGNMENT") {
             std::string asgId = extractString(line, "assignmentId");
+            const auto* asg = engine.getAssignment(asgId);
+            std::string emId = asg ? asg->emergencyId : "";
+
             engine.submit(emergency::AssignmentDeclined{asgId, currentTimestamp()});
             auto results = engine.processAllPendingEvents();
-            sendResponse("{\"success\":true,\"cmd\":\"DECLINE_ASSIGNMENT\",\"assignmentId\":\"" + escapeJson(asgId) + "\"}", reqId);
+
+            bool overallSuccess = true;
+            std::string errMsg;
+            for (const auto& res : results) {
+                if (!res.success) {
+                    overallSuccess = false;
+                    errMsg = res.error;
+                    break;
+                }
+            }
+
+            if (!overallSuccess) {
+                sendResponse("{\"success\":false,\"cmd\":\"DECLINE_ASSIGNMENT\",\"assignmentId\":\"" + escapeJson(asgId) + "\",\"error\":\"" + escapeJson(errMsg) + "\"}", reqId);
+            } else {
+                std::stringstream ss;
+                ss << "{\"success\":true,\"cmd\":\"DECLINE_ASSIGNMENT\",\"assignmentId\":\"" << escapeJson(asgId) << "\"";
+                if (!emId.empty()) {
+                    ss << ",\"emergencyId\":\"" << escapeJson(emId) << "\"";
+                }
+                ss << ",\"notifications\":[";
+                bool first = true;
+                for (const auto& res : results) {
+                    for (const auto& note : res.notifications) {
+                        if (!first) ss << ",";
+                        ss << "\"" << escapeJson(note) << "\"";
+                        first = false;
+                    }
+                }
+                ss << "]";
+
+                for (const auto& res : results) {
+                    if (res.allocation && res.allocation->allocated) {
+                        ss << ",\"allocatedTeamId\":\"" << escapeJson(res.allocation->teamId) << "\"";
+                        ss << ",\"distanceKm\":" << res.allocation->distanceKm;
+                    }
+                    if (!res.assignmentId.empty()) {
+                        ss << ",\"newAssignmentId\":\"" << escapeJson(res.assignmentId) << "\"";
+                    }
+                    if (res.route) {
+                        ss << ",\"route\":{\"totalDistanceKm\":" << res.route->totalDistanceKm << ",\"nodeIds\":[";
+                        for (size_t i = 0; i < res.route->nodeIds.size(); ++i) {
+                            if (i > 0) ss << ",";
+                            ss << "\"" << escapeJson(res.route->nodeIds[i]) << "\"";
+                        }
+                        ss << "]}";
+                    }
+                }
+                ss << "}";
+                sendResponse(ss.str(), reqId);
+            }
         }
         else if (cmd == "COMPLETE_EMERGENCY") {
             std::string emId = extractString(line, "emergencyId");

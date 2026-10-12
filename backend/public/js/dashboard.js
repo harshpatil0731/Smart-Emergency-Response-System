@@ -516,7 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       } else if (msg.eventType === 'TEAM_LOCATION_UPDATED') {
         addLogEntry('info', `Unit ${msg.teamId} moved (Node: ${msg.nodeId || 'transit'})`);
-        if (cityMap) cityMap.updateTeamLocation(msg.teamId, msg.lat, msg.lon, msg.nodeId);
+        if (cityMap) cityMap.updateTeamLocation(msg.teamId, msg.lat, msg.lon, msg.nodeId, msg.timestamp);
       } else if (msg.eventType === 'EMERGENCY_REPORTED') {
         if (msg.allocatedTeamId) {
           addLogEntry('success', `Emergency ${msg.emergencyId} assigned to Unit ${msg.allocatedTeamId}`);
@@ -527,9 +527,17 @@ document.addEventListener('DOMContentLoaded', () => {
         addLogEntry('info', `Assignment ${msg.assignmentId} accepted by unit.`);
       } else if (msg.eventType === 'ASSIGNMENT_DECLINED') {
         addLogEntry('warn', `Assignment ${msg.assignmentId} declined! Unit freed, incident requeued in Heap.`);
-      } else if (msg.eventType === 'TEAM_REGISTERED') {
+      } else if (msg.eventType === 'TEAM_REGISTERED' || msg.eventType === 'TEAM_ACTIVATED') {
         const teamInfo = msg.team || {};
-        addLogEntry('success', `New Unit Registered: ${msg.teamId} (${teamInfo.type || 'UNIT'}) - Driver: ${teamInfo.driverName || 'N/A'}`);
+        addLogEntry('success', `Unit Active: ${msg.teamId} (${teamInfo.type || 'UNIT'}) - Driver: ${teamInfo.driverName || 'N/A'}`);
+        if (cityMap) {
+          const lat = msg.lat || teamInfo.lat;
+          const lon = msg.lon || teamInfo.lon;
+          const nodeId = msg.nodeId || teamInfo.nodeId;
+          if (lat && lon) {
+            cityMap.updateTeamLocation(msg.teamId, lat, lon, nodeId, msg.timestamp);
+          }
+        }
       } else if (msg.eventType === 'TEAM_LOGGED_OUT') {
         addLogEntry('warn', `Unit ${msg.teamId} logged out of service.`);
         if (cityMap) cityMap.removeTeamMarker(msg.teamId);

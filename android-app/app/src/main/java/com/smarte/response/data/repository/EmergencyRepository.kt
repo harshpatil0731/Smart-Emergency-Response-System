@@ -334,7 +334,7 @@ class EmergencyRepository(
                     val em = snapshot.emergencies?.find { it.id == asg.emergencyId }
                     _activeEmergency.value = em
 
-                    if (asg.status == "OFFERED" && _team.value?.status != "BUSY") {
+                    if (asg.status == "OFFERED") {
                         _incomingAssignment.value = asg
                     } else if (asg.status == "ACCEPTED") {
                         _incomingAssignment.value = null
@@ -406,6 +406,9 @@ class EmergencyRepository(
             "ASSIGNMENT_DECLINED" -> {
                 if (event.teamId == myTeamId || _incomingAssignment.value?.id == event.assignmentId) {
                     _incomingAssignment.value = null
+                    scope.launch { refreshState() }
+                }
+                if (event.allocatedTeamId == myTeamId || event.reallocatedTeamId == myTeamId) {
                     scope.launch { refreshState() }
                 }
             }

@@ -438,8 +438,18 @@ function enrichSnapshot(snapshot) {
         t.vehicleNumber = meta.vehicleNumber;
         t.locationType = meta.locationType;
         t.locationName = meta.locationName;
-        if (meta.lat && (!t.lat || t.lat === 0)) t.lat = meta.lat;
-        if (meta.lon && (!t.lon || t.lon === 0)) t.lon = meta.lon;
+        if (meta.lat !== undefined && meta.lat !== null && meta.lat !== 0) {
+          t.lat = meta.lat;
+        }
+        if (meta.lon !== undefined && meta.lon !== null && meta.lon !== 0) {
+          t.lon = meta.lon;
+        }
+        if (meta.nodeId) {
+          t.nodeId = meta.nodeId;
+        }
+        if (meta.updatedAt) {
+          t.updatedAt = meta.updatedAt;
+        }
         if (meta.status === 'OFFLINE') {
           t.status = 'OFFLINE';
         }
@@ -676,18 +686,24 @@ app.post('/api/drivers/register', async (req, res) => {
     });
 
     const unitId = regResult.driver.unitId;
+    const normLocType = (locationType || 'DECCAN_GYMKHANA').trim().toUpperCase().replace(/\s+/g, '_');
+    const demo = PREDEFINED_DEMO_LOCATIONS[normLocType] || PREDEFINED_DEMO_LOCATIONS['DECCAN_GYMKHANA'];
+    const resolvedRegLat = (lat !== undefined && lat !== null && !isNaN(parseFloat(lat)) && parseFloat(lat) !== 0) ? parseFloat(lat) : demo.lat;
+    const resolvedRegLon = (lon !== undefined && lon !== null && !isNaN(parseFloat(lon)) && parseFloat(lon) !== 0) ? parseFloat(lon) : demo.lon;
+
     registeredTeams.set(unitId, {
       driverId: regResult.driver.id,
       driverName: regResult.driver.driverName,
       vehicleNumber: regResult.driver.vehicleNumber,
-      locationType: locationType || 'DECCAN_GYMKHANA',
-      locationName: locationType === 'CAMP_ZONE' ? 'Camp Zone' : (locationType === 'SHIVAJI_NAGAR' ? 'Shivaji Nagar' : 'Deccan Gymkhana'),
-      lat: lat || 18.5160,
-      lon: lon || 73.8400,
-      nodeId: 'Deccan_Gymkhana_D',
+      locationType: normLocType,
+      locationName: demo.locationName,
+      lat: resolvedRegLat,
+      lon: resolvedRegLon,
+      nodeId: demo.nodeId,
       role: engineType,
       status: 'OFFLINE',
-      mobileNumber: cleanMobile
+      mobileNumber: cleanMobile,
+      updatedAt: Date.now()
     });
 
     console.log(`[Backend] Registered new driver account in ${supabaseService.isConfigured() ? 'Supabase' : 'local persistent storage'}: ${cleanDriverName} (${cleanMobile}) -> Unit ID: ${unitId}`);
@@ -884,6 +900,7 @@ app.post('/api/drivers/activate', async (req, res) => {
     targetMeta.lon = resolvedLon;
     targetMeta.nodeId = resolvedNodeId;
     targetMeta.status = 'AVAILABLE';
+    targetMeta.updatedAt = Date.now();
     registeredTeams.set(targetUnitId, targetMeta);
 
     // Broadcast update
@@ -895,6 +912,10 @@ app.post('/api/drivers/activate', async (req, res) => {
       type: 'SNAPSHOT_UPDATED',
       eventType: 'TEAM_REGISTERED',
       teamId: targetUnitId,
+      nodeId: resolvedNodeId,
+      lat: resolvedLat,
+      lon: resolvedLon,
+      timestamp: targetMeta.updatedAt,
       team: newTeam,
       data: snapshot
     });
@@ -1143,8 +1164,9 @@ app.post('/api/emergencies', async (req, res) => {
 
     // Persist assignment in Supabase if allocated
     if (result.allocatedTeamId && result.route) {
+      const asgId = result.assignmentId || `ASG-${emId}-${result.allocatedTeamId}`;
       await supabaseService.saveAssignment({
-        id: `ASG-${emId}-${result.allocatedTeamId}`,
+        id: asgId,
         emergencyId: emId,
         teamId: result.allocatedTeamId,
         status: 'OFFERED',
@@ -1313,6 +1335,24 @@ app.post('/api/teams/:id/location', requireAuth, requireUnitOwnership, async (re
       nodeId = 'Hospital_A';
     }
 
+    const meta = registeredTeams.get(teamId);
+    const updateTime = req.body.timestamp ? Number(req.body.timestamp) : Date.now();
+
+    // Prevent stale GPS packets from overwriting newer authoritative coordinates
+    if (meta) {
+      if (meta.updatedAt && updateTime < meta.updatedAt) {
+        return res.json({ success: true, ignored: true, reason: 'Stale location update discarded' });
+      }
+
+      // If unit is currently standing by at a chosen fixed demo station (e.g. Shivaji Nagar),
+      // preserve the selected station coordinates unless forced or in CURRENT_LOCATION mode.
+      // (Live GPS tracking is fully preserved when locationType is CURRENT_LOCATION or unit is BUSY in-transit)
+      const isPredefinedStandby = meta.locationType && meta.locationType !== 'CURRENT_LOCATION' && meta.status === 'AVAILABLE';
+      if (isPredefinedStandby && !req.body.force) {
+        return res.json({ success: true, ignored: true, reason: 'Preserving authoritative fixed station location' });
+      }
+    }
+
     const result = await sendToEngine({
       cmd: 'UPDATE_TEAM_LOCATION',
       teamId,
@@ -1322,11 +1362,11 @@ app.post('/api/teams/:id/location', requireAuth, requireUnitOwnership, async (re
     });
 
     // Update in-memory metadata if registered
-    const meta = registeredTeams.get(teamId);
     if (meta) {
       if (parsedLat !== 0) meta.lat = parsedLat;
       if (parsedLon !== 0) meta.lon = parsedLon;
       meta.nodeId = nodeId;
+      meta.updatedAt = updateTime;
     }
 
     // Update location telemetry in Supabase & location_history
@@ -1341,6 +1381,7 @@ app.post('/api/teams/:id/location', requireAuth, requireUnitOwnership, async (re
       nodeId,
       lat: parsedLat,
       lon: parsedLon,
+      timestamp: updateTime,
       data: snapshot
     });
 
@@ -1350,14 +1391,68 @@ app.post('/api/teams/:id/location', requireAuth, requireUnitOwnership, async (re
   }
 });
 
+async function checkAssignmentOwnership(req, asgId) {
+  if (!req.headers.authorization) {
+    return { authorized: true };
+  }
+  const auth = await supabaseService.verifyToken(req.headers.authorization);
+  if (!auth) {
+    return { authorized: false, status: 401, error: 'Invalid or expired authentication token.' };
+  }
+
+  const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+  const asg = raw.assignments ? raw.assignments.find(a => a.id === asgId) : null;
+  if (!asg) {
+    return { authorized: false, status: 404, error: `Assignment ${asgId} not found.` };
+  }
+
+  const teamId = asg.teamId;
+  let meta = registeredTeams.get(teamId);
+  if (!meta) {
+    const dbUnit = await supabaseService.getUnitById(teamId);
+    if (dbUnit) {
+      meta = {
+        driverId: dbUnit.driver_id,
+        driverName: dbUnit.driver?.driver_name || '',
+        vehicleNumber: dbUnit.vehicle_number,
+        role: dbUnit.role,
+        mobileNumber: dbUnit.driver?.mobile_number || ''
+      };
+      registeredTeams.set(teamId, meta);
+    }
+  }
+
+  const driverId = auth.userId;
+  const accountId = auth.driverAccount ? auth.driverAccount.id : null;
+  const isOwner = (meta && meta.driverId && (meta.driverId === driverId || meta.driverId === accountId));
+  if (!isOwner) {
+    return { authorized: false, status: 403, error: 'Forbidden: You cannot modify an assignment belonging to another driver.' };
+  }
+
+  return { authorized: true, driver: auth };
+}
+
 // Accept Assignment
 app.post('/api/assignments/:id/accept', async (req, res) => {
   try {
     const asgId = req.params.id;
+
+    // Verify ownership if caller provides authentication
+    const authCheck = await checkAssignmentOwnership(req, asgId);
+    if (!authCheck.authorized) {
+      return res.status(authCheck.status).json({ success: false, error: authCheck.error });
+    }
+
     const result = await sendToEngine({
       cmd: 'ACCEPT_ASSIGNMENT',
       assignmentId: asgId
     });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    await supabaseService.acceptAssignment(asgId);
 
     const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
     const snapshot = enrichSnapshot(raw);
@@ -1378,10 +1473,59 @@ app.post('/api/assignments/:id/accept', async (req, res) => {
 app.post('/api/assignments/:id/decline', async (req, res) => {
   try {
     const asgId = req.params.id;
+
+    // Verify ownership if caller provides authentication
+    const authCheck = await checkAssignmentOwnership(req, asgId);
+    if (!authCheck.authorized) {
+      return res.status(authCheck.status).json({ success: false, error: authCheck.error });
+    }
+
+    // Capture declining team ID before engine decline
+    let decliningTeamId = null;
+    try {
+      const prevRaw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
+      const prevAsg = prevRaw.assignments ? prevRaw.assignments.find(a => a.id === asgId) : null;
+      if (prevAsg) decliningTeamId = prevAsg.teamId;
+    } catch (_) {}
+
     const result = await sendToEngine({
       cmd: 'DECLINE_ASSIGNMENT',
       assignmentId: asgId
     });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    // Update Supabase for the declined assignment and response unit
+    await supabaseService.declineAssignment(asgId);
+
+    if (decliningTeamId) {
+      const declMeta = registeredTeams.get(decliningTeamId);
+      if (declMeta) {
+        declMeta.status = 'AVAILABLE';
+      }
+    }
+
+    // If reallocation selected a new team, persist the new assignment in Supabase
+    if (result.allocatedTeamId && result.route) {
+      const allocMeta = registeredTeams.get(result.allocatedTeamId);
+      if (allocMeta) {
+        allocMeta.status = 'BUSY';
+      }
+      const emId = result.emergencyId;
+      const newAsgId = result.newAssignmentId || result.assignmentId || `ASG-${emId || 'EM'}-${result.allocatedTeamId}`;
+      const routeEta = result.route.etaMinutes || calculateRouteEta(result.route.nodeIds, result.route.totalDistanceKm, 'AMBULANCE');
+      await supabaseService.saveAssignment({
+        id: newAsgId,
+        emergencyId: emId,
+        teamId: result.allocatedTeamId,
+        status: 'OFFERED',
+        routeNodes: result.route.nodeIds,
+        distanceKm: result.route.totalDistanceKm,
+        etaMinutes: routeEta
+      });
+    }
 
     const raw = await sendToEngine({ cmd: 'GET_SNAPSHOT' });
     const snapshot = enrichSnapshot(raw);
@@ -1389,6 +1533,9 @@ app.post('/api/assignments/:id/decline', async (req, res) => {
       type: 'SNAPSHOT_UPDATED',
       eventType: 'ASSIGNMENT_DECLINED',
       assignmentId: asgId,
+      teamId: decliningTeamId,
+      allocatedTeamId: result.allocatedTeamId || null,
+      reallocatedTeamId: result.allocatedTeamId || null,
       data: snapshot
     });
 

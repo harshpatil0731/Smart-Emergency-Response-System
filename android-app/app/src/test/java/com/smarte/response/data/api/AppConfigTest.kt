@@ -7,9 +7,19 @@ class AppConfigTest {
 
     @Test
     fun testDefaultBaseUrlAndWsUrl() {
+        assertEquals("https://smart-emergency-response-system-i8at.onrender.com", AppConfig.DEFAULT_PRODUCTION_BASE_URL)
         assertEquals("http://10.0.2.2:4000", AppConfig.DEFAULT_EMULATOR_BASE_URL)
         val ws = AppConfig.getWsUrlFromBaseUrl("http://10.0.2.2:4000")
         assertEquals("ws://10.0.2.2:4000/ws", ws)
+    }
+
+    @Test
+    fun testProductionRenderUrlAndWsUrl() {
+        val result = AppConfig.validateAndNormalizeUrl(AppConfig.DEFAULT_PRODUCTION_BASE_URL)
+        assertTrue(result.isSuccess)
+        assertEquals("https://smart-emergency-response-system-i8at.onrender.com", result.getOrThrow())
+        val wsUrl = AppConfig.getWsUrlFromBaseUrl(result.getOrThrow())
+        assertEquals("wss://smart-emergency-response-system-i8at.onrender.com/ws", wsUrl)
     }
 
     @Test

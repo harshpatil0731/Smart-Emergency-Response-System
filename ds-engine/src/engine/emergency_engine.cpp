@@ -92,12 +92,31 @@ EngineResult EmergencyEngine::handle(const DomainEvent& event) {
         } else if constexpr (std::is_same_v<Event, AssignmentDeclined>) {
             EngineResult result;
             Assignment* assignment = state_.assignmentsById.find(value.assignmentId);
-            if (!assignment || assignment->status != AssignmentStatus::OFFERED) { result.success = false; result.error = "Offer not found or not pending acceptance"; return result; }
+            if (!assignment) { result.success = false; result.error = "Offer not found"; return result; }
+            if (assignment->status == AssignmentStatus::DECLINED) {
+                result.success = true;
+                result.notifications.push_back("Assignment already declined: " + assignment->id);
+                return result;
+            }
+            if (assignment->status != AssignmentStatus::OFFERED) { result.success = false; result.error = "Offer not found or not pending acceptance"; return result; }
             assignment->status = AssignmentStatus::DECLINED;
-            if (ResponseTeam* team = state_.teamsById.find(assignment->teamId)) { team->activeAssignmentId.clear(); if (team->status != TeamStatus::OFFLINE) team->status = TeamStatus::AVAILABLE; }
-            if (Emergency* emergency = state_.emergenciesById.find(assignment->emergencyId)) { emergency->status = EmergencyStatus::PENDING; emergency->updatedAt = value.timestamp; state_.pendingEmergencyHeap.requeue(*emergency); }
+            Emergency* emergency = state_.emergenciesById.find(assignment->emergencyId);
+            if (emergency) {
+                emergency->recordDecline(assignment->teamId);
+                emergency->status = EmergencyStatus::PENDING;
+                emergency->updatedAt = value.timestamp;
+                state_.pendingEmergencyHeap.requeue(*emergency);
+            }
+            if (ResponseTeam* team = state_.teamsById.find(assignment->teamId)) {
+                team->activeAssignmentId.clear();
+                if (team->status != TeamStatus::OFFLINE) team->status = TeamStatus::AVAILABLE;
+            }
             record(value.timestamp, "Assignment declined: " + assignment->id);
+            result.notifications.push_back("Assignment declined: " + assignment->id);
             retryPendingEmergencies(result);
+            if (emergency && emergency->status == EmergencyStatus::PENDING) {
+                result.notifications.push_back("Emergency " + emergency->id + " remains pending; no remaining eligible response teams");
+            }
             return result;
         } else {  // EmergencyCompleted
             EngineResult result;
@@ -145,18 +164,30 @@ void EmergencyEngine::attemptAllocation(const std::string& emergencyId, EngineRe
     emergency->status = EmergencyStatus::ASSIGNED;
     team->status = TeamStatus::BUSY; team->activeAssignmentId = assignment.id;
     result.route = route;
+    result.assignmentId = assignment.id;
     result.notifications.push_back("Team " + team->id + " offered assignment " + assignment.id);
 }
 
 void EmergencyEngine::retryPendingEmergencies(EngineResult& result) {
     const std::size_t attempts = state_.pendingEmergencyHeap.size();
+    std::vector<std::string> unallocatedIds;
+    unallocatedIds.reserve(attempts);
     for (std::size_t index = 0; index < attempts; ++index) {
         const auto queued = state_.pendingEmergencyHeap.popNext();
         if (!queued) break;
         Emergency* current = state_.emergenciesById.find(queued->id);
         if (!current || current->status != EmergencyStatus::PENDING) continue;  // Lazy removal of stale heap entries.
         attemptAllocation(current->id, result);
-        if (current->status == EmergencyStatus::PENDING) state_.pendingEmergencyHeap.requeue(*current);
+        if (current->status == EmergencyStatus::PENDING) {
+            unallocatedIds.push_back(current->id);
+        }
+    }
+    for (const auto& id : unallocatedIds) {
+        if (Emergency* em = state_.emergenciesById.find(id)) {
+            if (em->status == EmergencyStatus::PENDING) {
+                state_.pendingEmergencyHeap.requeue(*em);
+            }
+        }
     }
 }
 

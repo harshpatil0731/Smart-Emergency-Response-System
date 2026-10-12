@@ -14,6 +14,7 @@ struct EngineResult {
     std::vector<std::string> notifications;
     std::optional<AllocationDecision> allocation;
     std::optional<RouteResult> route;
+    std::string assignmentId;
 };
 
 }  // namespace emergency

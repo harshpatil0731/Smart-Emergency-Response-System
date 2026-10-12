@@ -251,6 +251,7 @@ data class WebSocketEvent(
     val status: String? = null,
     val nodeId: String? = null,
     val allocatedTeamId: String? = null,
+    val reallocatedTeamId: String? = null,
     val reroute: RerouteData? = null,
     val data: SnapshotResponse? = null
 )
