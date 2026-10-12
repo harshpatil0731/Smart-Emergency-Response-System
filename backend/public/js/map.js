@@ -289,7 +289,7 @@ class CityMapController {
     this._renderRoads(snapshot.roads || []);
 
     // 4. Render Active C++ Dijkstra Routes
-    this._renderRoutes(snapshot.assignments || []);
+    this._renderRoutes(snapshot.assignments || [], snapshot.emergencies || []);
 
     // 5. Render Emergencies
     this._renderEmergencies(snapshot.emergencies || [], snapshot.assignments || []);
@@ -405,12 +405,23 @@ class CityMapController {
    * Render active routes strictly calculated by the C++ Dijkstra engine.
    * Converts each route node ID to lat/lon in the exact order returned by the C++ engine.
    */
-  _renderRoutes(assignments) {
+  _renderRoutes(assignments, emergencies = []) {
     this.layerRoutes.clearLayers();
     this.routePolylines.clear();
 
+    const closedEmergencies = new Set();
+    (emergencies || []).forEach(em => {
+      if (em.status === 'COMPLETED' || em.status === 'CANCELLED') {
+        closedEmergencies.add(em.id);
+      }
+    });
+
+    const activeStatuses = new Set(['OFFERED', 'ACCEPTED', 'ASSIGNED', 'IN_PROGRESS', 'EN_ROUTE']);
+
     assignments.forEach(asg => {
-      if (asg.status === 'COMPLETED' || !asg.routeNodes || asg.routeNodes.length < 2) return;
+      if (!asg.status || !activeStatuses.has(asg.status)) return;
+      if (asg.emergencyId && closedEmergencies.has(asg.emergencyId)) return;
+      if (!asg.routeNodes || asg.routeNodes.length < 2) return;
 
       // Extract ordered coordinates from the C++ Dijkstra route
       const latLngs = [];
@@ -494,7 +505,8 @@ class CityMapController {
       const marker = L.marker([emLat, emLon], { icon: customIcon });
 
       // Find active assignment
-      const asg = assignments.find(a => a.emergencyId === em.id && a.status !== 'COMPLETED');
+      const activeStatuses = new Set(['OFFERED', 'ACCEPTED', 'ASSIGNED', 'IN_PROGRESS', 'EN_ROUTE']);
+      const asg = assignments.find(a => a.emergencyId === em.id && activeStatuses.has(a.status));
       const assignedText = asg ? `<span style="color:#00e5ff; font-weight:bold;">${asg.teamId} (ASG: ${asg.id})</span>` : '<em>Queued in Priority Heap</em>';
 
       const popupHtml = `

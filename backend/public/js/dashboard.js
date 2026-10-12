@@ -303,7 +303,8 @@ document.addEventListener('DOMContentLoaded', () => {
       const sClass = (em.status || 'pending').toLowerCase();
 
       // Find active assignment if any
-      const asg = appState.assignments.find(a => a.emergencyId === em.id && a.status !== 'COMPLETED');
+      const activeStatuses = ['OFFERED', 'ACCEPTED', 'ASSIGNED', 'IN_PROGRESS', 'EN_ROUTE'];
+      const asg = appState.assignments.find(a => a.emergencyId === em.id && activeStatuses.includes(a.status));
       const assignedUnit = asg ? `<span style="color:var(--accent-cyan); font-weight:bold;">${asg.teamId}</span>` : '<span style="color:var(--text-muted);">&mdash;</span>';
 
       const actionBtn = (em.status !== 'COMPLETED')
@@ -497,7 +498,8 @@ document.addEventListener('DOMContentLoaded', () => {
       let oldRouteNodes = [];
       if (msg.eventType === 'ROAD_STATUS_CHANGED' && msg.reroute) {
         if (appState.assignments && appState.assignments.length > 0) {
-          const activeAsg = appState.assignments.find(a => a.status !== 'COMPLETED' && a.routeNodes);
+          const activeStatuses = ['OFFERED', 'ACCEPTED', 'ASSIGNED', 'IN_PROGRESS', 'EN_ROUTE'];
+          const activeAsg = appState.assignments.find(a => activeStatuses.includes(a.status) && a.routeNodes);
           if (activeAsg) oldRouteNodes = [...activeAsg.routeNodes];
         }
       }
